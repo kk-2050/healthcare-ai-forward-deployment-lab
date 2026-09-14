@@ -1,0 +1,44 @@
+# File Name: settings.example.yaml
+# Purpose: Provides a safe example configuration structure for configurable, non-secret values.
+# Creation Date: 2026-09-13
+# Author: K.Kashiwagi
+
+# -----------------------------------------------------------------------
+# EXAMPLE configuration structure only.
+#
+# All values marked <CONFIGURE> are placeholders. None of the values in
+# this file represent real payer policy, real clinical rules, or real
+# business thresholds. They exist only to show WHERE configurable,
+# business-sensitive values should live so they are not hard-coded.
+#
+# Copy to settings.yaml locally (git-ignored, or managed via environment
+# variables) and set real values there once implementation begins.
+# -----------------------------------------------------------------------
+
+workflow:
+  # Maximum number of times a failed LLM call may be retried before
+  # routing the case to human review.
+  llm_retry_limit: <CONFIGURE>
+
+  # Maximum time (seconds) the workflow will wait on an external
+  # healthcare API call before treating it as a failure.
+  external_api_timeout_seconds: <CONFIGURE>
+
+ai:
+  # Minimum model confidence required to accept an LLM-suggested
+  # classification/summary without routing to human review.
+  review_confidence_threshold: <CONFIGURE>
+
+  # Maximum number of tokens permitted in a structured LLM response.
+  max_output_tokens: <CONFIGURE>
+
+business_rules:
+  # Placeholder example only — NOT a real payer or clinical rule.
+  example_threshold: <CONFIGURE>
+
+  # Placeholder example only — NOT a real payer or clinical rule.
+  example_required_field_count: <CONFIGURE>
+
+audit:
+  # Whether every workflow transition must be written to the audit log.
+  log_all_state_transitions: <CONFIGURE>

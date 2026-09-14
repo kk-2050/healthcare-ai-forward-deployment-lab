@@ -1,0 +1,34 @@
+# File Name: .gitignore
+# Purpose: Defines local, generated, secret, and environment-specific files that must not be committed.
+# Creation Date: 2026-09-13
+# Author: K.Kashiwagi
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Python virtual environments
+.venv/
+venv/
+
+# Python bytecode / cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editors / IDEs
+.vscode/
+.idea/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
