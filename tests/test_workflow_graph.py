@@ -5,6 +5,7 @@
 
 from datetime import date
 
+from src.models.ai import AIProcessingRequirements, AITask
 from src.models.case import PriorAuthorizationCase
 from src.models.rules import CompletenessRequirements
 from src.rules.completeness import evaluate_completeness
@@ -34,11 +35,16 @@ def make_requirements(**overrides):
     return CompletenessRequirements(**data)
 
 
-def run_workflow(case, requirements):
+def run_workflow(case, requirements, ai_processing_requirements=None):
+    if ai_processing_requirements is None:
+        ai_processing_requirements = AIProcessingRequirements()
+
     initial_state: CaseWorkflowState = {
         "case": case,
         "completeness_requirements": requirements,
         "completeness_result": None,
+        "ai_processing_requirements": ai_processing_requirements,
+        "ai_routing_result": None,
         "workflow_status": WorkflowStatus.PROCESSING,
         "human_review_required": False,
         "processing_steps": [],
@@ -165,6 +171,109 @@ def test_workflow_does_not_mutate_original_case():
     original_notes = case.clinical_notes
 
     run_workflow(case, requirements)
+
+    assert case.supporting_documentation == original_documentation
+    assert case.clinical_notes == original_notes
+
+
+def test_complete_case_without_ai_tasks_reaches_complete_with_expected_step_order():
+    # TEST-005G
+    case = make_case()
+    requirements = make_requirements()
+
+    final_state = run_workflow(case, requirements)
+
+    assert final_state["workflow_status"] == WorkflowStatus.COMPLETE
+    assert final_state["processing_steps"] == [
+        "completeness_evaluated",
+        "ai_requirement_evaluated",
+        "workflow_completed",
+    ]
+
+
+def test_complete_case_with_approved_ai_task_reaches_ai_analysis_required():
+    # TEST-005H
+    case = make_case()
+    requirements = make_requirements()
+    ai_requirements = AIProcessingRequirements(tasks=[AITask.SUMMARIZE_NARRATIVE])
+
+    final_state = run_workflow(case, requirements, ai_requirements)
+
+    assert final_state["workflow_status"] == WorkflowStatus.AI_ANALYSIS_REQUIRED
+    assert final_state["human_review_required"] is False
+
+
+def test_complete_case_with_ai_task_preserves_requested_task():
+    # TEST-005I
+    case = make_case()
+    requirements = make_requirements()
+    ai_requirements = AIProcessingRequirements(tasks=[AITask.IDENTIFY_AMBIGUITY])
+
+    final_state = run_workflow(case, requirements, ai_requirements)
+
+    assert final_state["ai_routing_result"].requested_tasks == [
+        AITask.IDENTIFY_AMBIGUITY
+    ]
+
+
+def test_incomplete_case_with_ai_task_still_routes_to_human_review():
+    # TEST-005J
+    case = make_case(supporting_documentation=[])
+    requirements = make_requirements(required_documentation=["SYN-DOC-A"])
+    ai_requirements = AIProcessingRequirements(tasks=[AITask.SUMMARIZE_NARRATIVE])
+
+    final_state = run_workflow(case, requirements, ai_requirements)
+
+    assert final_state["workflow_status"] == WorkflowStatus.HUMAN_REVIEW_REQUIRED
+    assert "ai_requirement_evaluated" not in final_state["processing_steps"]
+    assert "ai_analysis_required" not in final_state["processing_steps"]
+
+
+def test_ai_analysis_required_path_never_produces_complete_status():
+    # TEST-005K
+    case = make_case()
+    requirements = make_requirements()
+    ai_requirements = AIProcessingRequirements(tasks=[AITask.SUMMARIZE_NARRATIVE])
+
+    final_state = run_workflow(case, requirements, ai_requirements)
+
+    assert final_state["workflow_status"] != WorkflowStatus.COMPLETE
+    assert "workflow_completed" not in final_state["processing_steps"]
+
+
+def test_completeness_result_remains_intact_after_ai_routing():
+    # TEST-005L
+    case = make_case()
+    requirements = make_requirements()
+    ai_requirements = AIProcessingRequirements(tasks=[AITask.SUMMARIZE_NARRATIVE])
+
+    direct_completeness_result = evaluate_completeness(case, requirements)
+    final_state = run_workflow(case, requirements, ai_requirements)
+
+    assert (
+        final_state["completeness_result"].is_complete
+        == direct_completeness_result.is_complete
+    )
+    assert (
+        final_state["completeness_result"].missing_fields
+        == direct_completeness_result.missing_fields
+    )
+    assert (
+        final_state["completeness_result"].missing_documentation
+        == direct_completeness_result.missing_documentation
+    )
+
+
+def test_ai_routing_does_not_mutate_original_case():
+    # TEST-005M
+    case = make_case()
+    requirements = make_requirements()
+    ai_requirements = AIProcessingRequirements(tasks=[AITask.SUMMARIZE_NARRATIVE])
+
+    original_documentation = list(case.supporting_documentation)
+    original_notes = case.clinical_notes
+
+    run_workflow(case, requirements, ai_requirements)
 
     assert case.supporting_documentation == original_documentation
     assert case.clinical_notes == original_notes
