@@ -7,6 +7,7 @@ import operator
 from enum import Enum
 from typing import Annotated, TypedDict
 
+from src.ai.contracts import AIAnalysisOutcome
 from src.models.ai import AIProcessingRequirements, AIRoutingResult
 from src.models.case import PriorAuthorizationCase
 from src.models.rules import CompletenessRequirements, CompletenessResult
@@ -17,6 +18,7 @@ class WorkflowStatus(str, Enum):
     COMPLETE = "COMPLETE"
     HUMAN_REVIEW_REQUIRED = "HUMAN_REVIEW_REQUIRED"
     AI_ANALYSIS_REQUIRED = "AI_ANALYSIS_REQUIRED"
+    AI_ANALYSIS_COMPLETE = "AI_ANALYSIS_COMPLETE"
 
 
 class CaseWorkflowState(TypedDict):
@@ -25,6 +27,7 @@ class CaseWorkflowState(TypedDict):
     completeness_result: CompletenessResult | None
     ai_processing_requirements: AIProcessingRequirements
     ai_routing_result: AIRoutingResult | None
+    ai_analysis_outcome: AIAnalysisOutcome | None
     workflow_status: WorkflowStatus
     human_review_required: bool
     processing_steps: Annotated[list[str], operator.add]
