@@ -138,3 +138,43 @@ top-of-file metadata header containing:
 - Do not add metadata in a way that breaks the file syntax.
 - For formats where comments are not supported, ask before creating
   the file.
+
+## Code Documentation Standard
+
+All program code (not just Python — apply the same spirit to any future
+language in this repo) must be written so another engineer can maintain
+it without relying on the original developer. This applies to new code
+and to existing code being substantially modified.
+
+- Use Professional Simple English. Prefer "Checks whether required
+  documents are present" over "Performs deterministic adjudication of
+  required-document presence."
+- Explain **what** the code does and **why** important logic exists —
+  not just how. Obvious syntax does not need a comment.
+- Document inputs and outputs when it helps a reader (what a function
+  receives, what it returns, what state it changes) — not for every
+  trivial line.
+- Explain important assumptions, restrictions, and maintenance
+  cautions where a maintainer could otherwise misunderstand or
+  accidentally break something.
+- Make the deterministic-vs-AI-vs-human responsibility boundary
+  explicit wherever relevant: what is a deterministic fact, what is
+  AI-generated inference (never treated as verified truth), and what
+  requires a human decision.
+- Document security-sensitive boundaries (e.g., what a component must
+  never receive or expose — secrets, credentials, raw provider
+  internals, PHI/PII).
+- Use a visually separated section-comment block (uppercase section
+  name, Purpose/Why/Important Notes as applicable) for meaningful
+  logical sections — not for every few lines.
+- Give important classes and functions a concise docstring: what it
+  represents/does, why it exists, and any real safety or maintenance
+  boundary. Keep it short, not an essay.
+- Every test should have a short docstring or comment explaining what
+  behavior or requirement it protects — not a restatement of its name.
+- Avoid over-commenting obvious syntax (e.g., "# Return result" above
+  a `return` statement adds no value).
+- Never describe planned, mocked, or not-yet-implemented behavior as if
+  it were already implemented. Keep the IMPLEMENTED / PLANNED / MOCKED
+  distinction honest in comments, the same way it must stay honest in
+  [README.md](README.md).

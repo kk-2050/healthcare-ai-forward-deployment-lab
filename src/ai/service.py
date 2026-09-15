@@ -14,10 +14,47 @@ from src.ai.contracts import (
 from src.ai.provider import AIAnalysisProvider
 
 
+# =====================================================================
+# SAFE AI FAILURE ROUTING
+# Purpose:
+# Runs an injected AI provider and validates whatever it returns,
+# turning every possible outcome — success, malformed output, or a
+# provider error — into one explicit AIAnalysisOutcome.
+#
+# Why:
+# The workflow must never continue as if AI analysis succeeded when the
+# provider failed or returned invalid structured output. Centralizing
+# that check here (instead of in the workflow or the API) means every
+# caller gets the same safety guarantee for free.
+#
+# Input:
+# - request: the minimum-necessary AIAnalysisRequest to send.
+# - provider: any object matching the AIAnalysisProvider protocol
+#   (a MockAIAnalysisProvider in tests; a real provider in the future).
+#
+# Output:
+# An AIAnalysisOutcome. success=True only when the provider returned
+# data that (a) matches the AIAnalysisResult schema and (b) only claims
+# tasks that were actually requested.
+#
+# Important Notes:
+# - Never create a fabricated fallback AI result. Every failure path
+#   below returns result=None.
+# - Raw exception text and raw invalid provider output are never placed
+#   in error_message — only a short, generic, safe message.
+# =====================================================================
 def run_ai_analysis(
     request: AIAnalysisRequest,
     provider: AIAnalysisProvider,
 ) -> AIAnalysisOutcome:
+    """
+    Calls the provider and validates its output.
+
+    Returns an AIAnalysisOutcome describing success, or one of the two
+    AIAnalysisFailureType failures (PROVIDER_FAILED or
+    OUTPUT_VALIDATION_FAILED). Never raises — callers can rely on
+    always getting back a structured outcome.
+    """
     try:
         raw_output = provider.analyze(request)
     except Exception:
