@@ -19,6 +19,7 @@ from src.ai.service import run_ai_analysis
 from src.integrations.fhir_client import FHIRStyleClient
 from src.rules.ai_routing import evaluate_ai_requirement
 from src.rules.completeness import evaluate_completeness
+from src.rules.evidence_consistency import evaluate_evidence_consistency
 from src.workflow.state import CaseWorkflowState, WorkflowStatus
 
 
@@ -80,6 +81,44 @@ def build_retrieve_healthcare_evidence_node(fhir_client: FHIRStyleClient):
         }
 
     return retrieve_healthcare_evidence_node
+
+
+# =====================================================================
+# EVIDENCE CONSISTENCY CHECK
+# Purpose:
+# Compares submitted case facts with validated healthcare evidence
+# before completeness checks or AI processing.
+#
+# Why:
+# Clear factual conflicts should be handled deterministically instead
+# of asking AI to decide which healthcare fact is correct.
+#
+# Important Notes:
+# - Exact matching rules come from evidence_consistency.py.
+# - This node does not duplicate business-rule logic.
+# - Mismatches route directly to human review.
+# - AI does not run when a factual mismatch is already known.
+# - Neither input object is modified.
+# - This node is only ever reached after a successful healthcare
+#   evidence retrieval (see route_after_healthcare_evidence in
+#   src/workflow/graph.py), so state["fhir_integration_outcome"].evidence
+#   is always present here — never None.
+# =====================================================================
+def evaluate_evidence_consistency_node(state: CaseWorkflowState) -> dict:
+    """Checks whether the submitted case agrees with retrieved evidence."""
+    case = state["case"]
+    evidence = state["fhir_integration_outcome"].evidence
+
+    result = evaluate_evidence_consistency(case, evidence)
+
+    processing_steps = ["evidence_consistency_evaluated"]
+    if not result.is_consistent:
+        processing_steps.append("evidence_mismatch_detected")
+
+    return {
+        "evidence_consistency_result": result,
+        "processing_steps": processing_steps,
+    }
 
 
 # =====================================================================

@@ -9,18 +9,19 @@
 # case can take:
 #
 #   Healthcare evidence retrieval failed -> HUMAN_REVIEW_REQUIRED
-#   Healthcare evidence retrieved, case incomplete -> HUMAN_REVIEW_REQUIRED
-#   Healthcare evidence retrieved, complete, no AI task -> COMPLETE
-#   Healthcare evidence retrieved, complete, AI task -> AI analysis
+#   Healthcare evidence retrieved, facts inconsistent -> HUMAN_REVIEW_REQUIRED
+#   Healthcare evidence retrieved, consistent, case incomplete -> HUMAN_REVIEW_REQUIRED
+#   Healthcare evidence retrieved, consistent, complete, no AI task -> COMPLETE
+#   Healthcare evidence retrieved, consistent, complete, AI task -> AI analysis
 #     AI success                 -> AI_ANALYSIS_COMPLETE
 #     AI provider failure         -> HUMAN_REVIEW_REQUIRED
 #     Malformed AI output         -> HUMAN_REVIEW_REQUIRED
 #
 # All routing below is deterministic: each routing function reads a
 # plain field already stored in state (e.g. `outcome.success`,
-# `result.is_complete`) and returns a fixed next-step name. Neither the
-# AI's free-form text content nor any FHIR-style resource content is
-# ever inspected to choose a route.
+# `result.is_complete`, `result.is_consistent`) and returns a fixed
+# next-step name. Neither the AI's free-form text content nor any
+# FHIR-style resource content is ever inspected to choose a route.
 
 from langgraph.graph import END, START, StateGraph
 
@@ -34,6 +35,7 @@ from src.workflow.nodes import (
     complete_node,
     evaluate_ai_requirement_node,
     evaluate_completeness_node,
+    evaluate_evidence_consistency_node,
     human_review_required_node,
 )
 from src.workflow.state import CaseWorkflowState
@@ -43,18 +45,39 @@ def route_after_healthcare_evidence(state: CaseWorkflowState) -> str:
     """
     Routes the case after healthcare (FHIR-style) evidence retrieval.
 
-    Successful retrieval continues to the existing completeness check.
+    Successful retrieval continues to the evidence consistency check.
     Any integration failure (HTTP error, malformed JSON, invalid
     schema, unsupported resource type, missing ServiceRequest, or a
     broken Condition reference — see FHIRIntegrationFailureType) goes
-    straight to human review. Completeness evaluation and AI processing
-    are never reached on a healthcare integration failure, so AI can
-    never be asked to fill in evidence the integration could not
-    retrieve.
+    straight to human review. Evidence consistency, completeness
+    evaluation, and AI processing are never reached on a healthcare
+    integration failure, so AI can never be asked to fill in evidence
+    the integration could not retrieve.
     """
     outcome = state["fhir_integration_outcome"]
 
     if outcome is not None and outcome.success:
+        return "evaluate_evidence_consistency"
+
+    return "human_review_required"
+
+
+def route_after_evidence_consistency(state: CaseWorkflowState) -> str:
+    """
+    Routes the case after comparing submitted facts with retrieved
+    healthcare evidence.
+
+    Consistent facts continue to the existing completeness check. Any
+    mismatch (service code, diagnosis code, or missing documentation —
+    see EvidenceMismatchReason) goes straight to human review. This is
+    a deliberate safety boundary: AI must never be asked to decide
+    which of two conflicting healthcare facts is correct, so
+    completeness evaluation and AI processing are never reached when
+    evidence is inconsistent.
+    """
+    result = state["evidence_consistency_result"]
+
+    if result is not None and result.is_consistent:
         return "evaluate_completeness"
 
     return "human_review_required"
@@ -149,6 +172,7 @@ def build_case_workflow_graph(
         "retrieve_healthcare_evidence",
         build_retrieve_healthcare_evidence_node(fhir_client),
     )
+    graph.add_node("evaluate_evidence_consistency", evaluate_evidence_consistency_node)
     graph.add_node("evaluate_completeness", evaluate_completeness_node)
     graph.add_node("evaluate_ai_requirement", evaluate_ai_requirement_node)
     graph.add_node("complete", complete_node)
@@ -161,6 +185,14 @@ def build_case_workflow_graph(
     graph.add_conditional_edges(
         "retrieve_healthcare_evidence",
         route_after_healthcare_evidence,
+        {
+            "evaluate_evidence_consistency": "evaluate_evidence_consistency",
+            "human_review_required": "human_review_required",
+        },
+    )
+    graph.add_conditional_edges(
+        "evaluate_evidence_consistency",
+        route_after_evidence_consistency,
         {
             "evaluate_completeness": "evaluate_completeness",
             "human_review_required": "human_review_required",

@@ -25,6 +25,7 @@ from src.integrations.fhir_client import FHIRStyleClient
 from src.integrations.fhir_models import FHIRIntegrationFailureType
 from src.models.ai import AIProcessingRequirements, AITask
 from src.models.case import PriorAuthorizationCase
+from src.models.evidence import EvidenceConsistencyResult, EvidenceMismatchReason
 from src.models.rules import CompletenessRequirements
 from src.rules.completeness import evaluate_completeness
 from src.workflow.graph import build_case_workflow_graph
@@ -32,14 +33,23 @@ from src.workflow.state import CaseWorkflowState, WorkflowStatus
 
 
 def make_case(**overrides):
-    """A minimal, fully valid synthetic case, letting each test
-    override only the fields it cares about."""
+    """
+    A minimal, fully valid synthetic case, letting each test override
+    only the fields it cares about.
+
+    requested_service_code/diagnosis_code default to the same values as
+    valid_fhir_bundle_json()'s default Bundle (Task 17B), so the
+    default case and the default FHIR evidence agree with each other —
+    otherwise every default-path test would now be routed to human
+    review by the new evidence consistency check before ever reaching
+    completeness or AI processing.
+    """
     data = {
         "case_id": "SYN-CASE-001",
         "member_id": "SYN-MEMBER-001",
         "provider_id": "SYN-PROVIDER-001",
-        "requested_service_code": "SYN-SERVICE-001",
-        "diagnosis_code": "SYN-DX-001",
+        "requested_service_code": "SYN-LUMBAR-MRI",
+        "diagnosis_code": "SYN-LOW-BACK-PAIN",
         "requested_date": date(2026, 1, 15),
     }
     data.update(overrides)
@@ -61,6 +71,15 @@ def valid_fhir_bundle_json(entry=None):
     """
     A minimal, fully valid synthetic FHIR-style Bundle body.
 
+    The default entry (used when no override is supplied) includes a
+    Condition resource referenced by the ServiceRequest's
+    reasonReference, so the default retrieved evidence has both a
+    requested_service_code ("SYN-LUMBAR-MRI") and a diagnosis_codes
+    entry ("SYN-LOW-BACK-PAIN") that agree with make_case()'s defaults
+    (Task 17B) — required for the default success-path tests to reach
+    evidence consistency and pass it, rather than being routed to human
+    review by a mismatch.
+
     Kept local to this file (rather than imported from
     tests/test_fhir_client.py) so workflow tests stay independent of
     that test module's fixtures.
@@ -81,9 +100,24 @@ def valid_fhir_bundle_json(entry=None):
                         }
                     ]
                 },
-                "reasonReference": [],
+                "reasonReference": [{"reference": "Condition/SYN-COND-001"}],
             }
-        }
+        },
+        {
+            "resource": {
+                "resourceType": "Condition",
+                "id": "SYN-COND-001",
+                "code": {
+                    "coding": [
+                        {
+                            "system": "http://example.org/synthetic-codes",
+                            "code": "SYN-LOW-BACK-PAIN",
+                            "display": "Low back pain (synthetic)",
+                        }
+                    ]
+                },
+            }
+        },
     ]
     return {
         "resourceType": "Bundle",
@@ -117,6 +151,31 @@ def make_fhir_client(
         http_client=httpx.Client(transport=httpx.MockTransport(handler)),
         base_url="https://synthetic-fhir-style.example.internal",
     )
+
+
+def fhir_bundle_json_with_documentation(*titles):
+    """
+    Extends the default synthetic Bundle (Task 17B) with one
+    DocumentReference resource per title given.
+
+    Used by tests that need submitted documentation to be found in the
+    retrieved evidence (so the evidence consistency check passes) while
+    still exercising completeness logic, which is a separate concern —
+    see src/rules/completeness.py and src/rules/evidence_consistency.py.
+    """
+    bundle = valid_fhir_bundle_json()
+    bundle["entry"] = bundle["entry"] + [
+        {
+            "resource": {
+                "resourceType": "DocumentReference",
+                "id": f"SYN-DOC-REF-{index}",
+                "status": "current",
+                "content": [{"title": title}],
+            }
+        }
+        for index, title in enumerate(titles, start=1)
+    ]
+    return bundle
 
 
 def run_workflow(
@@ -161,6 +220,7 @@ def run_workflow(
     initial_state: CaseWorkflowState = {
         "case": case,
         "fhir_integration_outcome": None,
+        "evidence_consistency_result": None,
         "completeness_requirements": requirements,
         "completeness_result": None,
         "ai_processing_requirements": ai_processing_requirements,
@@ -233,14 +293,18 @@ def test_complete_path_excludes_human_review_step():
 def test_complete_case_without_ai_tasks_reaches_complete_with_expected_step_order():
     """
     Verify the exact processing-step order for the simplest path:
-    healthcare evidence retrieval, completeness check, AI-needed check
-    (which finds nothing to do), then completion.
+    healthcare evidence retrieval, evidence consistency check,
+    completeness check, AI-needed check (which finds nothing to do),
+    then completion.
 
     (TEST-005G, updated by Task 16B: healthcare evidence retrieval now
     runs before completeness evaluation, so "healthcare_evidence_retrieved"
-    is the new first step. This is a deliberate update to an existing
-    exact-list assertion, not a weakening — it now documents the real,
-    complete step order.)
+    is the new first step. Updated again by Task 17B: evidence
+    consistency now runs immediately after retrieval and before
+    completeness, so "evidence_consistency_evaluated" is inserted here
+    too. Both updates are deliberate strengthenings of this exact-list
+    assertion, not a weakening — it now documents the real, complete
+    step order.)
     """
     # TEST-005G
     case = make_case()
@@ -251,6 +315,7 @@ def test_complete_case_without_ai_tasks_reaches_complete_with_expected_step_orde
     assert final_state["workflow_status"] == WorkflowStatus.COMPLETE
     assert final_state["processing_steps"] == [
         "healthcare_evidence_retrieved",
+        "evidence_consistency_evaluated",
         "completeness_evaluated",
         "ai_requirement_evaluated",
         "workflow_completed",
@@ -305,15 +370,26 @@ def test_missing_clinical_notes_routes_to_human_review():
 def test_incomplete_case_preserves_exact_missing_documentation():
     """Verify the workflow's stored completeness_result matches what
     calling the rule directly would produce — the graph does not alter
-    the rule's answer."""
+    the rule's answer.
+
+    (Updated by Task 17B: the submitted "SYN-DOC-A" must now also be
+    present in the retrieved FHIR evidence, or the new evidence
+    consistency check would route this case to human review before
+    completeness ever runs — see fhir_bundle_json_with_documentation.
+    This does not weaken the test; it only supplies evidence consistent
+    with what the test already submits, so completeness logic is still
+    exercised exactly as before.)"""
     # TEST-004E
     case = make_case(supporting_documentation=["SYN-DOC-A"])
     requirements = make_requirements(
         required_documentation=["SYN-DOC-A", "SYN-DOC-B", "SYN-DOC-C"]
     )
+    fhir_client = make_fhir_client(
+        json_body=fhir_bundle_json_with_documentation("SYN-DOC-A")
+    )
 
     direct_result = evaluate_completeness(case, requirements)
-    final_state = run_workflow(case, requirements)
+    final_state = run_workflow(case, requirements, fhir_client=fhir_client)
 
     assert (
         final_state["completeness_result"].missing_documentation
@@ -783,10 +859,12 @@ def test_final_workflow_state_does_not_contain_ai_provider():
 
     assert "ai_provider" not in final_state
     # Updated by Task 16B: fhir_integration_outcome was added to
-    # CaseWorkflowState alongside the existing fields.
+    # CaseWorkflowState alongside the existing fields. Updated again by
+    # Task 17B: evidence_consistency_result was added.
     assert set(CaseWorkflowState.__annotations__.keys()) == {
         "case",
         "fhir_integration_outcome",
+        "evidence_consistency_result",
         "completeness_requirements",
         "completeness_result",
         "ai_processing_requirements",
@@ -1124,15 +1202,25 @@ def test_fhir_retrieval_does_not_mutate_original_case():
 def test_completeness_result_remains_correct_on_successful_integration():
     """Verify the existing deterministic completeness rule still
     produces the exact same result once healthcare retrieval runs
-    first — the new step must not change completeness behavior."""
+    first — the new step must not change completeness behavior.
+
+    (Updated by Task 17B: the submitted "SYN-DOC-A" must now also
+    appear in the retrieved FHIR evidence, or the new evidence
+    consistency check would route this case to human review before
+    completeness ever runs. Supplying consistent evidence here does not
+    weaken the test — completeness logic is still exercised exactly as
+    before.)"""
     # TEST-011R
     case = make_case(supporting_documentation=["SYN-DOC-A"])
     requirements = make_requirements(
         required_documentation=["SYN-DOC-A", "SYN-DOC-B"]
     )
+    fhir_client = make_fhir_client(
+        json_body=fhir_bundle_json_with_documentation("SYN-DOC-A")
+    )
 
     direct_result = evaluate_completeness(case, requirements)
-    final_state = run_workflow(case, requirements)
+    final_state = run_workflow(case, requirements, fhir_client=fhir_client)
 
     assert (
         final_state["completeness_result"].missing_documentation
@@ -1184,3 +1272,333 @@ def test_processing_steps_distinguish_healthcare_success_from_failure():
 
     assert "healthcare_integration_failed" in failure_state["processing_steps"]
     assert "healthcare_evidence_retrieved" not in failure_state["processing_steps"]
+
+
+# =====================================================================
+# EVIDENCE CONSISTENCY INTEGRATION TESTS (TASK 17B)
+#
+# These tests protect the new deterministic safety boundary: a factual
+# mismatch between the submitted case and retrieved FHIR-style evidence
+# must route straight to human review, before completeness or AI ever
+# run. AI must never be asked to decide which of two conflicting
+# healthcare facts is correct.
+# =====================================================================
+def test_evidence_consistency_runs_after_successful_fhir_retrieval():
+    """Verify evidence consistency is evaluated only after healthcare
+    evidence retrieval has already recorded its step."""
+    # TEST-013A
+    case = make_case()
+    requirements = make_requirements()
+
+    final_state = run_workflow(case, requirements)
+    steps = final_state["processing_steps"]
+
+    assert steps.index("healthcare_evidence_retrieved") < steps.index(
+        "evidence_consistency_evaluated"
+    )
+
+
+def test_evidence_consistency_runs_before_completeness_evaluation():
+    """Verify evidence consistency is evaluated before the completeness
+    check, so a factual mismatch is caught first."""
+    # TEST-013B
+    case = make_case()
+    requirements = make_requirements()
+
+    final_state = run_workflow(case, requirements)
+    steps = final_state["processing_steps"]
+
+    assert steps.index("evidence_consistency_evaluated") < steps.index(
+        "completeness_evaluated"
+    )
+
+
+def test_consistent_evidence_result_is_retained_in_final_state():
+    """Verify a consistent comparison result is stored in state, not
+    just used internally to decide routing."""
+    # TEST-013C
+    case = make_case()
+    requirements = make_requirements()
+
+    final_state = run_workflow(case, requirements)
+    result = final_state["evidence_consistency_result"]
+
+    assert isinstance(result, EvidenceConsistencyResult)
+    assert result.is_consistent is True
+    assert result.service_code_matches is True
+    assert result.diagnosis_code_matches is True
+    assert result.missing_documentation == []
+    assert result.mismatch_reasons == []
+
+
+def test_service_code_mismatch_routes_to_human_review():
+    """Verify a submitted service code that disagrees with the
+    retrieved evidence routes the case to human review."""
+    # TEST-013D
+    case = make_case(requested_service_code="SYN-DIFFERENT-CODE")
+    requirements = make_requirements()
+
+    final_state = run_workflow(case, requirements)
+
+    assert final_state["workflow_status"] == WorkflowStatus.HUMAN_REVIEW_REQUIRED
+    assert final_state["evidence_consistency_result"].is_consistent is False
+
+
+def test_diagnosis_code_mismatch_routes_to_human_review():
+    """Verify a submitted diagnosis code that disagrees with the
+    retrieved evidence routes the case to human review."""
+    # TEST-013E
+    case = make_case(diagnosis_code="SYN-DIFFERENT-DX")
+    requirements = make_requirements()
+
+    final_state = run_workflow(case, requirements)
+
+    assert final_state["workflow_status"] == WorkflowStatus.HUMAN_REVIEW_REQUIRED
+    assert final_state["evidence_consistency_result"].is_consistent is False
+
+
+def test_missing_documentation_evidence_routes_to_human_review():
+    """Verify submitted documentation that cannot be found (by exact
+    name) in the retrieved evidence routes the case to human review."""
+    # TEST-013F
+    case = make_case(supporting_documentation=["SYN-DOC-NOT-IN-EVIDENCE"])
+    requirements = make_requirements()
+
+    final_state = run_workflow(case, requirements)
+
+    assert final_state["workflow_status"] == WorkflowStatus.HUMAN_REVIEW_REQUIRED
+    assert final_state["evidence_consistency_result"].is_consistent is False
+
+
+def test_multiple_mismatch_reasons_still_route_to_human_review():
+    """Verify a case with several simultaneous factual disagreements
+    still routes to the single HUMAN_REVIEW_REQUIRED status — there is
+    no separate status per mismatch reason."""
+    # TEST-013G
+    case = make_case(
+        requested_service_code="SYN-DIFFERENT-CODE",
+        diagnosis_code="SYN-DIFFERENT-DX",
+        supporting_documentation=["SYN-MISSING-DOC"],
+    )
+    requirements = make_requirements()
+
+    final_state = run_workflow(case, requirements)
+
+    assert final_state["workflow_status"] == WorkflowStatus.HUMAN_REVIEW_REQUIRED
+    assert len(final_state["evidence_consistency_result"].mismatch_reasons) == 3
+
+
+def test_evidence_mismatch_does_not_call_ai_provider():
+    """Verify a known evidence mismatch never reaches the AI provider —
+    AI must not be asked to reason about facts already known to
+    conflict."""
+    # TEST-013H
+    case = make_case(requested_service_code="SYN-DIFFERENT-CODE")
+    requirements = make_requirements()
+    ai_requirements = AIProcessingRequirements(tasks=[AITask.SUMMARIZE_NARRATIVE])
+    ai_provider = MockAIAnalysisProvider(
+        response={"completed_tasks": ["summarize_narrative"]}
+    )
+
+    run_workflow(case, requirements, ai_requirements, ai_provider)
+
+    assert ai_provider.last_request is None
+
+
+def test_evidence_mismatch_does_not_run_completeness_evaluation():
+    """Verify a known evidence mismatch never reaches the completeness
+    check — completeness_result stays None, proving the workflow
+    stopped before that step."""
+    # TEST-013I
+    case = make_case(requested_service_code="SYN-DIFFERENT-CODE")
+    requirements = make_requirements()
+
+    final_state = run_workflow(case, requirements)
+
+    assert final_state["completeness_result"] is None
+    assert "completeness_evaluated" not in final_state["processing_steps"]
+
+
+def test_evidence_mismatch_does_not_fabricate_or_replace_case_values():
+    """Verify an evidence mismatch never "corrects" the submitted case
+    to match the retrieved evidence — the case in state must still show
+    exactly what was submitted, conflict and all. Resolving the
+    conflict is a human decision, not an automatic one."""
+    # TEST-013J
+    case = make_case(requested_service_code="SYN-DIFFERENT-CODE")
+    requirements = make_requirements()
+
+    final_state = run_workflow(case, requirements)
+
+    assert final_state["case"].requested_service_code == "SYN-DIFFERENT-CODE"
+
+
+def test_evidence_mismatch_does_not_mutate_fhir_evidence():
+    """Verify an evidence mismatch never modifies the retrieved
+    FHIRCaseEvidence to match the submitted case — the evidence in
+    state must still show exactly what the healthcare integration
+    returned."""
+    # TEST-013K
+    case = make_case(requested_service_code="SYN-DIFFERENT-CODE")
+    requirements = make_requirements()
+
+    final_state = run_workflow(case, requirements)
+
+    evidence = final_state["fhir_integration_outcome"].evidence
+    assert evidence.requested_service_code == "SYN-LUMBAR-MRI"
+
+
+def test_consistent_evidence_complete_case_no_ai_tasks_reaches_complete():
+    """Verify a consistent, complete case with no AI task requested
+    still reaches COMPLETE — the new consistency step must not block
+    the existing simplest path."""
+    # TEST-013L
+    case = make_case()
+    requirements = make_requirements()
+
+    final_state = run_workflow(case, requirements)
+
+    assert final_state["workflow_status"] == WorkflowStatus.COMPLETE
+    assert final_state["evidence_consistency_result"].is_consistent is True
+
+
+def test_consistent_evidence_with_ai_task_reaches_ai_execution():
+    """Verify a consistent case with an approved AI task still reaches
+    the existing AI execution path."""
+    # TEST-013M
+    case = make_case()
+    requirements = make_requirements()
+    ai_requirements = AIProcessingRequirements(tasks=[AITask.SUMMARIZE_NARRATIVE])
+
+    final_state = run_workflow(case, requirements, ai_requirements)
+
+    assert final_state["workflow_status"] == WorkflowStatus.AI_ANALYSIS_COMPLETE
+    assert final_state["evidence_consistency_result"].is_consistent is True
+
+
+def test_ai_provider_failure_still_routes_to_human_review_after_consistent_evidence():
+    """Verify the existing AI-failure-routes-to-human-review behavior
+    still works correctly once evidence consistency passes first — the
+    new step must not interfere with existing AI safety routing."""
+    # TEST-013N
+    case = make_case()
+    requirements = make_requirements()
+    ai_requirements = AIProcessingRequirements(tasks=[AITask.SUMMARIZE_NARRATIVE])
+    ai_provider = MockAIAnalysisProvider(
+        exception=RuntimeError("synthetic provider failure")
+    )
+
+    final_state = run_workflow(case, requirements, ai_requirements, ai_provider)
+
+    assert final_state["evidence_consistency_result"].is_consistent is True
+    assert final_state["workflow_status"] == WorkflowStatus.HUMAN_REVIEW_REQUIRED
+    assert (
+        final_state["ai_analysis_outcome"].failure_type
+        == AIAnalysisFailureType.PROVIDER_FAILED
+    )
+
+
+def test_fhir_integration_failure_routes_to_human_review_without_consistency_check():
+    """Verify a healthcare integration failure routes directly to human
+    review without ever running evidence consistency — there is no
+    evidence yet to compare against."""
+    # TEST-013O
+    case = make_case()
+    requirements = make_requirements()
+    fhir_client = make_fhir_client(status_code=500, json_body={"error": "synthetic"})
+
+    final_state = run_workflow(case, requirements, fhir_client=fhir_client)
+
+    assert final_state["workflow_status"] == WorkflowStatus.HUMAN_REVIEW_REQUIRED
+    assert "evidence_consistency_evaluated" not in final_state["processing_steps"]
+
+
+def test_fhir_integration_failure_does_not_produce_fake_evidence_consistency_result():
+    """Verify a healthcare integration failure never leaves a
+    fabricated EvidenceConsistencyResult in state — it must stay None,
+    proving the workflow never guessed at a comparison it could not
+    actually perform."""
+    # TEST-013P
+    case = make_case()
+    requirements = make_requirements()
+    fhir_client = make_fhir_client(status_code=500, json_body={"error": "synthetic"})
+
+    final_state = run_workflow(case, requirements, fhir_client=fhir_client)
+
+    assert final_state["evidence_consistency_result"] is None
+
+
+def test_evidence_consistency_result_contains_deterministic_mismatch_reasons():
+    """Verify the stored result reports the exact, expected mismatch
+    reason for a known service-code mismatch — not a generic flag."""
+    # TEST-013Q
+    case = make_case(requested_service_code="SYN-DIFFERENT-CODE")
+    requirements = make_requirements()
+
+    final_state = run_workflow(case, requirements)
+
+    assert final_state["evidence_consistency_result"].mismatch_reasons == [
+        EvidenceMismatchReason.SERVICE_CODE_MISMATCH
+    ]
+
+
+def test_evidence_consistency_result_is_data_only():
+    """Verify evidence_consistency_result is a plain data model (never
+    the rule function, a client, or a provider object), keeping the
+    workflow state safe to serialize/persist in the future (persistence
+    itself is not implemented yet)."""
+    # TEST-013R
+    case = make_case()
+    requirements = make_requirements()
+
+    final_state = run_workflow(case, requirements)
+
+    result = final_state["evidence_consistency_result"]
+    assert isinstance(result, EvidenceConsistencyResult)
+    for value in final_state.values():
+        assert not isinstance(value, FHIRStyleClient)
+        assert not callable(value)
+
+
+def test_consistent_path_processing_steps_include_expected_order():
+    """Verify the consistent-path trace shows healthcare retrieval,
+    evidence consistency, then completeness — in that order — so a
+    reviewer can tell the full success path happened from the trace
+    alone."""
+    # TEST-013S
+    case = make_case()
+    requirements = make_requirements()
+
+    final_state = run_workflow(case, requirements)
+    steps = final_state["processing_steps"]
+
+    assert steps.index("healthcare_evidence_retrieved") < steps.index(
+        "evidence_consistency_evaluated"
+    )
+    assert steps.index("evidence_consistency_evaluated") < steps.index(
+        "completeness_evaluated"
+    )
+
+
+def test_mismatch_path_processing_steps_include_expected_steps_only():
+    """Verify the mismatch-path trace shows retrieval, consistency
+    evaluation, mismatch detection, then human review — and never shows
+    completeness or AI steps, proving the workflow genuinely stopped
+    before them."""
+    # TEST-013T
+    case = make_case(requested_service_code="SYN-DIFFERENT-CODE")
+    requirements = make_requirements()
+    ai_requirements = AIProcessingRequirements(tasks=[AITask.SUMMARIZE_NARRATIVE])
+
+    final_state = run_workflow(case, requirements, ai_requirements)
+    steps = final_state["processing_steps"]
+
+    assert steps == [
+        "healthcare_evidence_retrieved",
+        "evidence_consistency_evaluated",
+        "evidence_mismatch_detected",
+        "human_review_required",
+    ]
+    assert "completeness_evaluated" not in steps
+    assert "ai_requirement_evaluated" not in steps
+    assert "ai_analysis_executed" not in steps

@@ -11,6 +11,7 @@ from src.ai.contracts import AIAnalysisOutcome
 from src.integrations.fhir_models import FHIRIntegrationOutcome
 from src.models.ai import AIProcessingRequirements, AIRoutingResult
 from src.models.case import PriorAuthorizationCase
+from src.models.evidence import EvidenceConsistencyResult
 from src.models.rules import CompletenessRequirements, CompletenessResult
 
 # =====================================================================
@@ -70,6 +71,11 @@ class WorkflowStatus(str, Enum):
 #   provider/client object, nor a live FHIR-style HTTP client (see
 #   src/workflow/nodes.py and graph.py for why both are injected
 #   separately instead).
+# - evidence_consistency_result holds the deterministic output of
+#   comparing the submitted case against retrieved FHIR-style evidence
+#   (see src/rules/evidence_consistency.py). It is None until that step
+#   runs, and it never runs at all when healthcare evidence retrieval
+#   failed (see route_after_healthcare_evidence in graph.py).
 # - Keeping this data-only is what makes future persistence and
 #   checkpointing possible — everything here is safe to serialize.
 #   Persistence itself is NOT implemented yet.
@@ -83,6 +89,7 @@ class WorkflowStatus(str, Enum):
 class CaseWorkflowState(TypedDict):
     case: PriorAuthorizationCase
     fhir_integration_outcome: FHIRIntegrationOutcome | None
+    evidence_consistency_result: EvidenceConsistencyResult | None
     completeness_requirements: CompletenessRequirements
     completeness_result: CompletenessResult | None
     ai_processing_requirements: AIProcessingRequirements
