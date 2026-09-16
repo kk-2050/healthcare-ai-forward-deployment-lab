@@ -99,11 +99,31 @@ it must be possible to see exactly which facts were supplied, what the
 rules concluded, what the AI suggested (if anything), and what a human
 ultimately decided.
 
-## 6. Related Documents
+## 6. Database Design
+
+**Current implementation:** a minimal persistence foundation exists —
+the `workflow_runs` and `audit_events` tables, accessed through a
+repository pattern, validated against a real local Microsoft SQL
+Server instance.
+
+**Target Phase 1 design:** a canonical 36-table relational model
+(organizational masters, case/workflow persistence, deterministic
+rule evaluations, integration execution records, validated AI output,
+human review, and immutable audit history), implemented incrementally
+through Waves. The target schema is a reviewed design baseline — it is
+not deployed yet.
+
+Full detail is maintained in the dedicated database documentation
+rather than duplicated here: [database/](database/) and
+[ADR-004](decisions/ADR-004-phase1-canonical-data-model.md).
+
+## 7. Related Documents
 
 - [requirements.md](requirements.md)
 - [security.md](security.md)
 - [production_roadmap.md](production_roadmap.md)
+- [database/](database/) — Phase 1 canonical database design documentation
 - [decisions/ADR-001-deterministic-first.md](decisions/ADR-001-deterministic-first.md)
 - [decisions/ADR-002-langgraph.md](decisions/ADR-002-langgraph.md)
 - [decisions/ADR-003-sql-server.md](decisions/ADR-003-sql-server.md)
+- [decisions/ADR-004-phase1-canonical-data-model.md](decisions/ADR-004-phase1-canonical-data-model.md)

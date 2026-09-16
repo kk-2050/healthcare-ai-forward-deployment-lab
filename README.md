@@ -50,22 +50,35 @@ clinical approval or denial decisions — see
 ## 4. Current Project Status
 
 **IMPLEMENTED:**
-- Repository/project skeleton
-- Initial documentation
+- Pydantic prior-authorization case validation
+- Deterministic completeness rules
+- FastAPI case-validation endpoint (`POST /cases/validate`)
+- LangGraph workflow foundation (explicit graph, nodes, and routing)
+- Deterministic AI-routing rules
+- Structured AI contract and provider flow (validated structured
+  output, never a raw/untrusted LLM response)
+- Azure OpenAI adapter and configuration
+- Synthetic FHIR-style integration client
+- Deterministic evidence-consistency rules
+- SQL persistence and audit foundation (`workflow_runs`, `audit_events`
+  tables via a repository pattern)
+- Local Microsoft SQL Server persistence validation (connectivity,
+  schema creation, and repository read/write round-trips against a
+  real local instance)
+- pytest test suite (241 tests passing as of this update)
 - Architecture design artifacts (ADRs, architecture/security/
   requirements docs)
 
-**PLANNED (not yet implemented):**
-- FastAPI application
-- Pydantic data models/validation
-- LangGraph workflow
-- SQL Server persistence
-- Azure OpenAI / Azure AI Foundry LLM integration
-- FHIR-style integration
+**DESIGNED / PLANNED (not yet implemented):**
+- Canonical Phase 1 relational data model (36 tables) — see
+  [docs/database/](docs/database/)
+- Incremental database implementation through Waves
+- Human-review persistence/lifecycle (today the workflow only carries
+  a `human_review_required` routing flag; there is no dedicated
+  review-task table or reviewer-decision persistence yet)
 - Streamlit application
-- pytest test suite
-
-No application code, database objects, or external API calls exist yet.
+- Remaining end-to-end and productionization work — see
+  [docs/production_roadmap.md](docs/production_roadmap.md)
 
 ## 5. Planned Phase 1 Stack
 
@@ -163,9 +176,16 @@ Phase 2 (production) would require.
 
 ## 10. Current Limitations
 
-- No application code has been implemented yet (design/documentation
-  phase only).
-- No real integrations, database objects, or external API calls exist.
+- No real external FHIR/payer system integration exists — the
+  FHIR-style client uses synthetic data only, not a live production
+  data source.
+- Only a minimal two-table persistence foundation (`workflow_runs`,
+  `audit_events`) is implemented; the canonical 36-table Phase 1
+  database design (see [docs/database/](docs/database/)) is a reviewed
+  baseline, not yet built.
+- Human-review outcomes are not yet persisted; only a routing flag
+  exists today.
+- No Streamlit UI exists yet.
 - Not evaluated for clinical, legal, or regulatory accuracy — it is a
   technical/architectural demonstration only.
 
@@ -178,11 +198,36 @@ observability, and formal AI governance. See
 [docs/production_roadmap.md](docs/production_roadmap.md) for the full
 summary.
 
-## 12. Documentation Index
+## 12. Database Design Documentation
+
+**IMPLEMENTED:**
+- A minimal persistence foundation: `workflow_runs` and `audit_events`
+  tables, accessed through a repository pattern (`AuditRepository`).
+  This has been validated against a real local Microsoft SQL Server
+  instance (connectivity, schema creation, and repository read/write
+  round-trips).
+
+**DESIGNED / PLANNED:**
+- A canonical Phase 1 relational data model (36 tables) covering
+  organizational masters, case/workflow persistence, deterministic
+  rule evaluations, integration execution records, validated AI
+  output, human review, and immutable audit history. This design has
+  been reviewed and approved as the Phase 1 baseline but is
+  implemented incrementally through Waves — it is **not** yet built.
+
+See:
+- [docs/database/data_model.md](docs/database/data_model.md)
+- [docs/database/data_dictionary.md](docs/database/data_dictionary.md)
+- [docs/database/reference_data.md](docs/database/reference_data.md)
+- [docs/database/constraints_and_indexes.md](docs/database/constraints_and_indexes.md)
+- [docs/decisions/ADR-004-phase1-canonical-data-model.md](docs/decisions/ADR-004-phase1-canonical-data-model.md)
+
+## 13. Documentation Index
 
 - [docs/requirements.md](docs/requirements.md)
 - [docs/architecture.md](docs/architecture.md)
 - [docs/security.md](docs/security.md)
 - [docs/production_roadmap.md](docs/production_roadmap.md)
 - [docs/decisions/](docs/decisions/) — Architecture Decision Records
+- [docs/database/](docs/database/) — Phase 1 canonical database design documentation
 - [CLAUDE.md](CLAUDE.md) — guidance for Claude Code in this repo

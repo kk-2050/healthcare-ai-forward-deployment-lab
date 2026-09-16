@@ -80,6 +80,11 @@ implemented in Phase 1's skeleton:
   be scoped to only what the prototype needs.
 - **Dependency hygiene**: keep dependencies current and avoid adding
   packages that aren't clearly justified by a requirement.
+- **Data minimization in persistence**: raw FHIR-style payloads and raw
+  LLM prompts/provider responses are not persisted; only validated,
+  structured data is stored. See the FHIR and AI persistence boundary
+  sections of [database/data_model.md](database/data_model.md) for the
+  full Phase 1 database design baseline.
 
 ## 5. AI Decision-Making Boundary
 
