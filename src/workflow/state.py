@@ -8,6 +8,7 @@ from enum import Enum
 from typing import Annotated, TypedDict
 
 from src.ai.contracts import AIAnalysisOutcome
+from src.integrations.fhir_models import FHIRIntegrationOutcome
 from src.models.ai import AIProcessingRequirements, AIRoutingResult
 from src.models.case import PriorAuthorizationCase
 from src.models.rules import CompletenessRequirements, CompletenessResult
@@ -31,7 +32,11 @@ from src.models.rules import CompletenessRequirements, CompletenessResult
 #   only that the AI-assisted language-analysis step finished
 #   successfully. A human still makes any real decision.
 # - HUMAN_REVIEW_REQUIRED is a safety outcome, not a failure of the
-#   system — it means a person needs to look at the case.
+#   system — it means a person needs to look at the case. It covers
+#   both an incomplete/AI-failure case and a healthcare (FHIR-style)
+#   integration failure; there is no separate "integration failed"
+#   clinical status, because none of these situations represent a
+#   clinical decision.
 # - AI_ANALYSIS_REQUIRED is a transient status set while the case is on
 #   its way into AI execution; it is not a final resting state in the
 #   current single-pass graph.
@@ -62,8 +67,9 @@ class WorkflowStatus(str, Enum):
 # Important Notes:
 # - This holds workflow/business data only — plain Pydantic models, an
 #   enum, a bool, and a list of strings. It does not hold a live AI
-#   provider/client object (see src/workflow/nodes.py and graph.py for
-#   why the provider is injected separately instead).
+#   provider/client object, nor a live FHIR-style HTTP client (see
+#   src/workflow/nodes.py and graph.py for why both are injected
+#   separately instead).
 # - Keeping this data-only is what makes future persistence and
 #   checkpointing possible — everything here is safe to serialize.
 #   Persistence itself is NOT implemented yet.
@@ -76,6 +82,7 @@ class WorkflowStatus(str, Enum):
 
 class CaseWorkflowState(TypedDict):
     case: PriorAuthorizationCase
+    fhir_integration_outcome: FHIRIntegrationOutcome | None
     completeness_requirements: CompletenessRequirements
     completeness_result: CompletenessResult | None
     ai_processing_requirements: AIProcessingRequirements

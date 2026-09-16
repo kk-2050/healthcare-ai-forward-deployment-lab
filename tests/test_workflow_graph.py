@@ -4,18 +4,25 @@
 # Author: K.Kashiwagi
 #
 # Module Explanation:
-# These tests protect the full LangGraph workflow end to end: routing
-# an incomplete case to human review, routing a complete case with no
-# AI task straight to COMPLETE, and running a complete case with an
-# approved AI task through AI execution (success, malformed output, or
-# provider failure). Every AI-related test here uses
-# MockAIAnalysisProvider — a MOCKED / TEST DOUBLE, not a live LLM — so
-# the whole file runs offline and deterministically.
+# These tests protect the full LangGraph workflow end to end: retrieving
+# healthcare (FHIR-style) evidence first, routing an incomplete case or
+# a failed healthcare integration to human review, routing a complete
+# case with no AI task straight to COMPLETE, and running a complete
+# case with an approved AI task through AI execution (success,
+# malformed output, or provider failure). Every AI-related test here
+# uses MockAIAnalysisProvider, and every healthcare-integration test
+# uses FHIRStyleClient backed by httpx.MockTransport — MOCKED / TEST
+# DOUBLES, never a live LLM or a live healthcare system — so the whole
+# file runs offline and deterministically.
 
 from datetime import date
 
+import httpx
+
 from src.ai.contracts import AIAnalysisFailureType, AIAnalysisRequest
 from src.ai.mock_provider import MockAIAnalysisProvider
+from src.integrations.fhir_client import FHIRStyleClient
+from src.integrations.fhir_models import FHIRIntegrationFailureType
 from src.models.ai import AIProcessingRequirements, AITask
 from src.models.case import PriorAuthorizationCase
 from src.models.rules import CompletenessRequirements
@@ -50,8 +57,74 @@ def make_requirements(**overrides):
     return CompletenessRequirements(**data)
 
 
+def valid_fhir_bundle_json(entry=None):
+    """
+    A minimal, fully valid synthetic FHIR-style Bundle body.
+
+    Kept local to this file (rather than imported from
+    tests/test_fhir_client.py) so workflow tests stay independent of
+    that test module's fixtures.
+    """
+    default_entry = [
+        {
+            "resource": {
+                "resourceType": "ServiceRequest",
+                "id": "SYN-SR-001",
+                "status": "active",
+                "intent": "order",
+                "code": {
+                    "coding": [
+                        {
+                            "system": "http://example.org/synthetic-codes",
+                            "code": "SYN-LUMBAR-MRI",
+                            "display": "Lumbar MRI (synthetic)",
+                        }
+                    ]
+                },
+                "reasonReference": [],
+            }
+        }
+    ]
+    return {
+        "resourceType": "Bundle",
+        "type": "collection",
+        "entry": default_entry if entry is None else entry,
+    }
+
+
+def make_fhir_client(
+    json_body=None, status_code=200, raw_content=None, on_request=None
+) -> FHIRStyleClient:
+    """
+    Builds an FHIRStyleClient backed by httpx.MockTransport -- an
+    offline test double that never opens a socket. Defaults to a
+    successful synthetic Bundle response unless overridden.
+
+    on_request, if supplied, is called with each outgoing httpx.Request
+    so a test can record what was requested (e.g. the case ID in the
+    URL path) without a real server.
+    """
+    body = valid_fhir_bundle_json() if json_body is None else json_body
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if on_request is not None:
+            on_request(request)
+        if raw_content is not None:
+            return httpx.Response(status_code, content=raw_content)
+        return httpx.Response(status_code, json=body)
+
+    return FHIRStyleClient(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        base_url="https://synthetic-fhir-style.example.internal",
+    )
+
+
 def run_workflow(
-    case, requirements, ai_processing_requirements=None, ai_provider=None
+    case,
+    requirements,
+    ai_processing_requirements=None,
+    ai_provider=None,
+    fhir_client=None,
 ):
     """
     Builds a fresh graph and runs one case through it end to end.
@@ -60,7 +133,10 @@ def run_workflow(
     used that echoes back whatever tasks were requested, so tests that
     don't care about AI execution details still get a deterministic
     successful outcome without wiring up a mock for every unrelated
-    assertion. The provider is passed into the graph factory (not
+    assertion. Likewise, if fhir_client is not supplied, a default
+    FHIRStyleClient backed by a successful synthetic Bundle is used, so
+    tests unrelated to healthcare integration still get a deterministic
+    successful retrieval. Both are passed into the graph factory (not
     stored in state) — see src/workflow/graph.py and state.py for why.
     """
     if ai_processing_requirements is None:
@@ -79,8 +155,12 @@ def run_workflow(
             }
         )
 
+    if fhir_client is None:
+        fhir_client = make_fhir_client()
+
     initial_state: CaseWorkflowState = {
         "case": case,
+        "fhir_integration_outcome": None,
         "completeness_requirements": requirements,
         "completeness_result": None,
         "ai_processing_requirements": ai_processing_requirements,
@@ -90,9 +170,10 @@ def run_workflow(
         "human_review_required": False,
         "processing_steps": [],
     }
-    # The provider is injected into the graph factory, not the state, so
-    # it can never be part of a future persisted/checkpointed case.
-    graph = build_case_workflow_graph(ai_provider)
+    # Both dependencies are injected into the graph factory, not the
+    # state, so neither can ever be part of a future persisted/
+    # checkpointed case.
+    graph = build_case_workflow_graph(ai_provider, fhir_client)
     return graph.invoke(initial_state)
 
 
@@ -150,9 +231,17 @@ def test_complete_path_excludes_human_review_step():
 
 
 def test_complete_case_without_ai_tasks_reaches_complete_with_expected_step_order():
-    """Verify the exact processing-step order for the simplest path:
-    completeness check, AI-needed check (which finds nothing to do),
-    then completion."""
+    """
+    Verify the exact processing-step order for the simplest path:
+    healthcare evidence retrieval, completeness check, AI-needed check
+    (which finds nothing to do), then completion.
+
+    (TEST-005G, updated by Task 16B: healthcare evidence retrieval now
+    runs before completeness evaluation, so "healthcare_evidence_retrieved"
+    is the new first step. This is a deliberate update to an existing
+    exact-list assertion, not a weakening — it now documents the real,
+    complete step order.)
+    """
     # TEST-005G
     case = make_case()
     requirements = make_requirements()
@@ -161,6 +250,7 @@ def test_complete_case_without_ai_tasks_reaches_complete_with_expected_step_orde
 
     assert final_state["workflow_status"] == WorkflowStatus.COMPLETE
     assert final_state["processing_steps"] == [
+        "healthcare_evidence_retrieved",
         "completeness_evaluated",
         "ai_requirement_evaluated",
         "workflow_completed",
@@ -692,8 +782,11 @@ def test_final_workflow_state_does_not_contain_ai_provider():
     final_state = run_workflow(case, requirements, ai_requirements, provider)
 
     assert "ai_provider" not in final_state
+    # Updated by Task 16B: fhir_integration_outcome was added to
+    # CaseWorkflowState alongside the existing fields.
     assert set(CaseWorkflowState.__annotations__.keys()) == {
         "case",
+        "fhir_integration_outcome",
         "completeness_requirements",
         "completeness_result",
         "ai_processing_requirements",
@@ -722,3 +815,372 @@ def test_workflow_state_contains_no_provider_or_client_objects():
     for value in final_state.values():
         assert not isinstance(value, MockAIAnalysisProvider)
         assert value is not provider
+
+
+# =====================================================================
+# HEALTHCARE INTEGRATION SUCCESS PATH TESTS
+# =====================================================================
+def test_healthcare_evidence_retrieval_occurs_before_completeness():
+    """Verify healthcare evidence retrieval is recorded before the
+    completeness check, proving FHIR-style retrieval is genuinely the
+    first workflow step."""
+    # TEST-011A
+    case = make_case()
+    requirements = make_requirements()
+
+    final_state = run_workflow(case, requirements)
+    steps = final_state["processing_steps"]
+
+    assert steps.index("healthcare_evidence_retrieved") < steps.index(
+        "completeness_evaluated"
+    )
+
+
+def test_validated_fhir_evidence_is_retained_in_final_state():
+    """Verify the validated FHIRCaseEvidence extracted from the
+    synthetic Bundle is available in the final workflow state, not
+    just a bare success flag."""
+    # TEST-011B
+    case = make_case()
+    requirements = make_requirements()
+
+    final_state = run_workflow(case, requirements)
+
+    outcome = final_state["fhir_integration_outcome"]
+    assert outcome is not None
+    assert outcome.success is True
+    assert outcome.evidence is not None
+    assert outcome.evidence.service_request_id == "SYN-SR-001"
+
+
+def test_fhir_client_is_called_with_synthetic_workflow_case_id():
+    """Verify the FHIR-style client is asked for evidence using the
+    exact case ID from the workflow's PriorAuthorizationCase, not a
+    placeholder or a different identifier."""
+    # TEST-011C
+    requested_urls = []
+
+    def record_request(request: httpx.Request) -> None:
+        requested_urls.append(str(request.url))
+
+    case = make_case(case_id="SYN-CASE-999")
+    requirements = make_requirements()
+    fhir_client = make_fhir_client(on_request=record_request)
+
+    run_workflow(case, requirements, fhir_client=fhir_client)
+
+    assert len(requested_urls) == 1
+    assert requested_urls[0].endswith("/fhir-style/cases/SYN-CASE-999")
+
+
+def test_successful_retrieval_with_no_ai_tasks_still_reaches_complete():
+    """Verify adding the healthcare retrieval step does not change the
+    existing outcome for a complete case with no AI task requested —
+    it still reaches COMPLETE."""
+    # TEST-011D
+    case = make_case()
+    requirements = make_requirements()
+
+    final_state = run_workflow(case, requirements)
+
+    assert final_state["workflow_status"] == WorkflowStatus.COMPLETE
+
+
+def test_successful_retrieval_with_ai_task_still_reaches_ai_execution():
+    """Verify adding the healthcare retrieval step does not change the
+    existing outcome for a complete case with an AI task requested —
+    it still reaches the existing AI execution path."""
+    # TEST-011E
+    case = make_case()
+    requirements = make_requirements()
+    ai_requirements = AIProcessingRequirements(tasks=[AITask.SUMMARIZE_NARRATIVE])
+
+    final_state = run_workflow(case, requirements, ai_requirements)
+
+    assert final_state["workflow_status"] == WorkflowStatus.AI_ANALYSIS_COMPLETE
+    assert final_state["ai_analysis_outcome"] is not None
+
+
+# =====================================================================
+# HEALTHCARE INTEGRATION FAILURE ROUTING TESTS
+# =====================================================================
+def test_http_failure_routes_to_human_review():
+    """Verify an HTTP-level healthcare integration failure (e.g. a
+    500 response) routes the case to human review instead of
+    continuing."""
+    # TEST-011F
+    case = make_case()
+    requirements = make_requirements()
+    fhir_client = make_fhir_client(status_code=500, json_body={"error": "synthetic"})
+
+    final_state = run_workflow(case, requirements, fhir_client=fhir_client)
+
+    assert final_state["workflow_status"] == WorkflowStatus.HUMAN_REVIEW_REQUIRED
+
+
+def test_malformed_json_routes_to_human_review():
+    """Verify a healthcare response body that is not valid JSON routes
+    the case to human review."""
+    # TEST-011G
+    case = make_case()
+    requirements = make_requirements()
+    fhir_client = make_fhir_client(raw_content=b"{not valid json")
+
+    final_state = run_workflow(case, requirements, fhir_client=fhir_client)
+
+    assert final_state["workflow_status"] == WorkflowStatus.HUMAN_REVIEW_REQUIRED
+
+
+def test_invalid_fhir_style_schema_routes_to_human_review():
+    """Verify a healthcare response that does not match the expected
+    FHIR-style schema routes the case to human review."""
+    # TEST-011H
+    case = make_case()
+    requirements = make_requirements()
+    entry = [
+        {
+            "resource": {
+                "resourceType": "ServiceRequest",
+                "id": "SYN-SR-001",
+                # "status" and "intent" are required and missing here.
+                "code": {"coding": []},
+            }
+        }
+    ]
+    fhir_client = make_fhir_client(json_body=valid_fhir_bundle_json(entry=entry))
+
+    final_state = run_workflow(case, requirements, fhir_client=fhir_client)
+
+    assert final_state["workflow_status"] == WorkflowStatus.HUMAN_REVIEW_REQUIRED
+
+
+def test_missing_service_request_routes_to_human_review():
+    """Verify a Bundle with no ServiceRequest resource routes the case
+    to human review."""
+    # TEST-011I
+    case = make_case()
+    requirements = make_requirements()
+    fhir_client = make_fhir_client(json_body=valid_fhir_bundle_json(entry=[]))
+
+    final_state = run_workflow(case, requirements, fhir_client=fhir_client)
+
+    assert final_state["workflow_status"] == WorkflowStatus.HUMAN_REVIEW_REQUIRED
+
+
+def test_broken_condition_reference_routes_to_human_review():
+    """Verify a ServiceRequest reasonReference pointing at a Condition
+    that does not exist in the Bundle routes the case to human review."""
+    # TEST-011J
+    case = make_case()
+    requirements = make_requirements()
+    entry = [
+        {
+            "resource": {
+                "resourceType": "ServiceRequest",
+                "id": "SYN-SR-001",
+                "status": "active",
+                "intent": "order",
+                "code": {"coding": [{"code": "SYN-LUMBAR-MRI"}]},
+                "reasonReference": [
+                    {"reference": "Condition/SYN-COND-DOES-NOT-EXIST"}
+                ],
+            }
+        }
+    ]
+    fhir_client = make_fhir_client(json_body=valid_fhir_bundle_json(entry=entry))
+
+    final_state = run_workflow(case, requirements, fhir_client=fhir_client)
+
+    assert final_state["workflow_status"] == WorkflowStatus.HUMAN_REVIEW_REQUIRED
+
+
+def test_unsupported_resource_type_routes_to_human_review():
+    """Verify a Bundle containing a resource type outside the approved
+    subset (e.g. "Patient") routes the case to human review."""
+    # TEST-011K
+    case = make_case()
+    requirements = make_requirements()
+    entry = [{"resource": {"resourceType": "Patient", "id": "SYN-PATIENT-001"}}]
+    fhir_client = make_fhir_client(json_body=valid_fhir_bundle_json(entry=entry))
+
+    final_state = run_workflow(case, requirements, fhir_client=fhir_client)
+
+    assert final_state["workflow_status"] == WorkflowStatus.HUMAN_REVIEW_REQUIRED
+
+
+# =====================================================================
+# HEALTHCARE INTEGRATION SAFETY BOUNDARY TESTS
+#
+# These tests protect the most important Task 16B safety rule: AI must
+# never run when healthcare evidence could not be retrieved, because
+# that would mean asking AI to reason about facts the integration
+# failed to provide.
+# =====================================================================
+def test_healthcare_failure_does_not_call_ai_provider():
+    """Verify a healthcare integration failure never reaches the AI
+    provider — AI must not be asked to work with missing evidence."""
+    # TEST-011L
+    case = make_case()
+    requirements = make_requirements()
+    ai_requirements = AIProcessingRequirements(tasks=[AITask.SUMMARIZE_NARRATIVE])
+    fhir_client = make_fhir_client(status_code=500, json_body={"error": "synthetic"})
+    ai_provider = MockAIAnalysisProvider(
+        response={"completed_tasks": ["summarize_narrative"]}
+    )
+
+    run_workflow(
+        case, requirements, ai_requirements, ai_provider, fhir_client=fhir_client
+    )
+
+    assert ai_provider.last_request is None
+
+
+def test_healthcare_failure_does_not_run_completeness_evaluation():
+    """Verify a healthcare integration failure never reaches the
+    completeness check — completeness_result stays None, proving the
+    workflow stopped before that step."""
+    # TEST-011M
+    case = make_case()
+    requirements = make_requirements()
+    fhir_client = make_fhir_client(status_code=500, json_body={"error": "synthetic"})
+
+    final_state = run_workflow(case, requirements, fhir_client=fhir_client)
+
+    assert final_state["completeness_result"] is None
+    assert "completeness_evaluated" not in final_state["processing_steps"]
+
+
+def test_healthcare_failure_produces_no_fabricated_evidence():
+    """Verify a healthcare integration failure never leaves fabricated
+    evidence in state — the stored outcome's evidence must be None."""
+    # TEST-011N
+    case = make_case()
+    requirements = make_requirements()
+    fhir_client = make_fhir_client(status_code=500, json_body={"error": "synthetic"})
+
+    final_state = run_workflow(case, requirements, fhir_client=fhir_client)
+
+    outcome = final_state["fhir_integration_outcome"]
+    assert outcome.success is False
+    assert outcome.evidence is None
+    assert outcome.failure_type == FHIRIntegrationFailureType.HTTP_ERROR
+
+
+# =====================================================================
+# HEALTHCARE INTEGRATION STATE SAFETY TESTS
+# =====================================================================
+def test_fhir_client_is_not_stored_in_final_state():
+    """Verify FHIRStyleClient never appears as a value in the final
+    workflow state — it is a runtime dependency injected into the graph
+    factory, not workflow/case data (same pattern as the AI provider,
+    see Task 13)."""
+    # TEST-011O
+    case = make_case()
+    requirements = make_requirements()
+    fhir_client = make_fhir_client()
+
+    final_state = run_workflow(case, requirements, fhir_client=fhir_client)
+
+    for value in final_state.values():
+        assert not isinstance(value, FHIRStyleClient)
+        assert value is not fhir_client
+
+
+def test_httpx_client_is_not_stored_in_final_state():
+    """Verify the underlying httpx.Client/transport object never
+    appears in the final workflow state — only plain, serializable
+    data belongs there."""
+    # TEST-011P
+    case = make_case()
+    requirements = make_requirements()
+
+    final_state = run_workflow(case, requirements)
+
+    for value in final_state.values():
+        assert not isinstance(value, httpx.Client)
+
+
+def test_fhir_retrieval_does_not_mutate_original_case():
+    """Verify healthcare evidence retrieval never modifies the original
+    PriorAuthorizationCase object supplied to the workflow."""
+    # TEST-011Q
+    case = make_case(supporting_documentation=["SYN-DOC-A"], clinical_notes="SYN-NOTE")
+    requirements = make_requirements()
+
+    original_documentation = list(case.supporting_documentation)
+    original_notes = case.clinical_notes
+    original_case_id = case.case_id
+
+    run_workflow(case, requirements)
+
+    assert case.supporting_documentation == original_documentation
+    assert case.clinical_notes == original_notes
+    assert case.case_id == original_case_id
+
+
+# =====================================================================
+# REGRESSION / INTEGRATION CONSISTENCY TESTS
+# =====================================================================
+def test_completeness_result_remains_correct_on_successful_integration():
+    """Verify the existing deterministic completeness rule still
+    produces the exact same result once healthcare retrieval runs
+    first — the new step must not change completeness behavior."""
+    # TEST-011R
+    case = make_case(supporting_documentation=["SYN-DOC-A"])
+    requirements = make_requirements(
+        required_documentation=["SYN-DOC-A", "SYN-DOC-B"]
+    )
+
+    direct_result = evaluate_completeness(case, requirements)
+    final_state = run_workflow(case, requirements)
+
+    assert (
+        final_state["completeness_result"].missing_documentation
+        == direct_result.missing_documentation
+    )
+    assert final_state["completeness_result"].is_complete == direct_result.is_complete
+
+
+def test_ai_provider_failure_still_routes_to_human_review_after_fhir_success():
+    """Verify the existing AI-failure-routes-to-human-review behavior
+    (Task 13) still works correctly once healthcare retrieval succeeds
+    first — the new step must not interfere with existing AI safety
+    routing."""
+    # TEST-011S
+    case = make_case()
+    requirements = make_requirements()
+    ai_requirements = AIProcessingRequirements(tasks=[AITask.SUMMARIZE_NARRATIVE])
+    ai_provider = MockAIAnalysisProvider(
+        exception=RuntimeError("synthetic provider failure")
+    )
+
+    final_state = run_workflow(case, requirements, ai_requirements, ai_provider)
+
+    assert final_state["fhir_integration_outcome"].success is True
+    assert final_state["workflow_status"] == WorkflowStatus.HUMAN_REVIEW_REQUIRED
+    assert (
+        final_state["ai_analysis_outcome"].failure_type
+        == AIAnalysisFailureType.PROVIDER_FAILED
+    )
+
+
+def test_processing_steps_distinguish_healthcare_success_from_failure():
+    """Verify the processing-step trace uses distinct, recognizable
+    names for a successful healthcare retrieval versus a failed one —
+    a reviewer reading the trace must be able to tell which happened."""
+    # TEST-011T
+    case = make_case()
+    requirements = make_requirements()
+
+    success_state = run_workflow(case, requirements)
+    failure_state = run_workflow(
+        case,
+        requirements,
+        fhir_client=make_fhir_client(status_code=500, json_body={"error": "synthetic"}),
+    )
+
+    assert "healthcare_evidence_retrieved" in success_state["processing_steps"]
+    assert "healthcare_integration_failed" not in success_state["processing_steps"]
+
+    assert "healthcare_integration_failed" in failure_state["processing_steps"]
+    assert "healthcare_evidence_retrieved" not in failure_state["processing_steps"]

@@ -9,15 +9,77 @@
 # current CaseWorkflowState and returns a small dict of the fields it
 # changed — LangGraph merges that into the state before the next node
 # runs. No node here re-implements business logic that already exists
-# elsewhere (completeness rules, AI routing rules, or the AI service);
-# each one only calls that existing logic and records the result.
+# elsewhere (completeness rules, AI routing rules, the AI service, or
+# the FHIR-style integration client); each one only calls that
+# existing logic and records the result.
 
 from src.ai.contracts import AIAnalysisFailureType, AIAnalysisRequest
 from src.ai.provider import AIAnalysisProvider
 from src.ai.service import run_ai_analysis
+from src.integrations.fhir_client import FHIRStyleClient
 from src.rules.ai_routing import evaluate_ai_requirement
 from src.rules.completeness import evaluate_completeness
 from src.workflow.state import CaseWorkflowState, WorkflowStatus
+
+
+# =====================================================================
+# HEALTHCARE EVIDENCE RETRIEVAL
+# Purpose:
+# Retrieves validated synthetic FHIR-style evidence before the workflow
+# performs completeness checks or AI processing.
+#
+# Why:
+# The workflow must not continue as if healthcare evidence exists when
+# the integration failed to retrieve it. Running completeness or AI
+# processing against missing/fabricated healthcare data would be
+# unsafe, so this step happens first and its result decides whether
+# the rest of the workflow is even reached.
+#
+# Important Notes:
+# - Retrieval is deterministic and does not use AI.
+# - Integration failures route directly to human review (see
+#   route_after_healthcare_evidence in src/workflow/graph.py) — the
+#   failure category is retained in state, but the routing decision
+#   itself only checks outcome.success, never the failure_type or any
+#   error text.
+# - AI must never fabricate evidence when healthcare retrieval fails:
+#   on failure, this node stores the failed FHIRIntegrationOutcome
+#   (evidence=None, per src/integrations/fhir_client.py) and the graph
+#   sends the case to human review before completeness or AI can run.
+# - The live FHIRStyleClient is injected as a runtime dependency (the
+#   same closure pattern as build_run_ai_analysis_node) and is never
+#   stored in CaseWorkflowState.
+# - This node does not mutate PriorAuthorizationCase with the retrieved
+#   evidence. Comparing submitted case data against FHIR evidence is
+#   separate business logic for a later, focused task.
+# =====================================================================
+def build_retrieve_healthcare_evidence_node(fhir_client: FHIRStyleClient):
+    """
+    Creates the retrieve_healthcare_evidence node, bound to one
+    specific FHIR-style client.
+
+    Returns a node function that closes over `fhir_client`, so the
+    client itself never has to be stored in CaseWorkflowState.
+    """
+
+    def retrieve_healthcare_evidence_node(state: CaseWorkflowState) -> dict:
+        """Retrieves FHIR-style evidence for the case and stores the outcome."""
+        case_id = state["case"].case_id
+
+        outcome = fhir_client.get_case_evidence(case_id)
+
+        step = (
+            "healthcare_evidence_retrieved"
+            if outcome.success
+            else "healthcare_integration_failed"
+        )
+
+        return {
+            "fhir_integration_outcome": outcome,
+            "processing_steps": [step],
+        }
+
+    return retrieve_healthcare_evidence_node
 
 
 # =====================================================================
@@ -43,8 +105,9 @@ def evaluate_completeness_node(state: CaseWorkflowState) -> dict:
 # Marks the case as needing a human reviewer.
 #
 # Why:
-# Cases reach this node when important information is missing, when AI
-# execution fails, or when AI returns invalid structured output. In
+# Cases reach this node when healthcare (FHIR-style) evidence could
+# not be retrieved, when important case information is missing, when
+# AI execution fails, or when AI returns invalid structured output. In
 # every one of those situations the safe choice is a person, not a
 # guess.
 # =====================================================================

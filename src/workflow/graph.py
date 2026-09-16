@@ -8,24 +8,28 @@
 # explicit graph, using LangGraph's StateGraph. It defines every path a
 # case can take:
 #
-#   Incomplete case            -> HUMAN_REVIEW_REQUIRED
-#   Complete case, no AI task  -> COMPLETE
-#   Complete case, AI task     -> AI analysis
+#   Healthcare evidence retrieval failed -> HUMAN_REVIEW_REQUIRED
+#   Healthcare evidence retrieved, case incomplete -> HUMAN_REVIEW_REQUIRED
+#   Healthcare evidence retrieved, complete, no AI task -> COMPLETE
+#   Healthcare evidence retrieved, complete, AI task -> AI analysis
 #     AI success                 -> AI_ANALYSIS_COMPLETE
 #     AI provider failure         -> HUMAN_REVIEW_REQUIRED
 #     Malformed AI output         -> HUMAN_REVIEW_REQUIRED
 #
 # All routing below is deterministic: each routing function reads a
-# plain field already stored in state (e.g. `result.is_complete`,
-# `outcome.success`) and returns a fixed next-step name. The AI's
-# free-form text content is never inspected to choose a route.
+# plain field already stored in state (e.g. `outcome.success`,
+# `result.is_complete`) and returns a fixed next-step name. Neither the
+# AI's free-form text content nor any FHIR-style resource content is
+# ever inspected to choose a route.
 
 from langgraph.graph import END, START, StateGraph
 
 from src.ai.provider import AIAnalysisProvider
+from src.integrations.fhir_client import FHIRStyleClient
 from src.workflow.nodes import (
     ai_analysis_complete_node,
     ai_analysis_required_node,
+    build_retrieve_healthcare_evidence_node,
     build_run_ai_analysis_node,
     complete_node,
     evaluate_ai_requirement_node,
@@ -33,6 +37,27 @@ from src.workflow.nodes import (
     human_review_required_node,
 )
 from src.workflow.state import CaseWorkflowState
+
+
+def route_after_healthcare_evidence(state: CaseWorkflowState) -> str:
+    """
+    Routes the case after healthcare (FHIR-style) evidence retrieval.
+
+    Successful retrieval continues to the existing completeness check.
+    Any integration failure (HTTP error, malformed JSON, invalid
+    schema, unsupported resource type, missing ServiceRequest, or a
+    broken Condition reference — see FHIRIntegrationFailureType) goes
+    straight to human review. Completeness evaluation and AI processing
+    are never reached on a healthcare integration failure, so AI can
+    never be asked to fill in evidence the integration could not
+    retrieve.
+    """
+    outcome = state["fhir_integration_outcome"]
+
+    if outcome is not None and outcome.success:
+        return "evaluate_completeness"
+
+    return "human_review_required"
 
 
 def route_after_completeness(state: CaseWorkflowState) -> str:
@@ -86,31 +111,44 @@ def route_after_ai_analysis(state: CaseWorkflowState) -> str:
 # =====================================================================
 # WORKFLOW GRAPH CONSTRUCTION
 # Purpose:
-# Builds one compiled LangGraph graph, wired to a specific AI provider.
+# Builds one compiled LangGraph graph, wired to a specific AI provider
+# and a specific FHIR-style healthcare integration client.
 #
 # Why:
-# The AI provider (a MockAIAnalysisProvider in tests, a real provider
-# in the future) is a runtime dependency, not workflow data — see
-# src/workflow/state.py for why it is deliberately kept out of
-# CaseWorkflowState. Taking it as a factory argument and passing it
-# into build_run_ai_analysis_node() means the graph's shape and routing
-# never need to change just to use a different provider.
+# Both the AI provider (a MockAIAnalysisProvider in tests, a real
+# provider in the future) and the FHIR-style client (an offline
+# httpx.MockTransport-backed client in tests, a real synthetic-service
+# client in the future) are runtime dependencies, not workflow data —
+# see src/workflow/state.py for why both are deliberately kept out of
+# CaseWorkflowState. Taking them as factory arguments and passing them
+# into build_run_ai_analysis_node()/build_retrieve_healthcare_evidence_node()
+# means the graph's shape and routing never need to change just to use
+# a different provider or client.
 #
 # Important Notes:
 # - This is a graph factory, not a single shared graph instance: call
-#   it once per provider you want to run with (e.g., once per test).
-# - The graph never instantiates a live AI provider itself; the caller
-#   always supplies one.
+#   it once per (ai_provider, fhir_client) pair you want to run with
+#   (e.g., once per test).
+# - The graph never instantiates a live AI provider or a live HTTP
+#   client itself; the caller always supplies both.
 # =====================================================================
-def build_case_workflow_graph(ai_provider: AIAnalysisProvider):
+def build_case_workflow_graph(
+    ai_provider: AIAnalysisProvider,
+    fhir_client: FHIRStyleClient,
+):
     """
-    Builds and compiles the case workflow graph for one AI provider.
+    Builds and compiles the case workflow graph for one AI provider and
+    one FHIR-style healthcare integration client.
 
     Returns a compiled LangGraph graph. Call `.invoke(initial_state)`
     on the result to run one case through the full workflow.
     """
     graph = StateGraph(CaseWorkflowState)
 
+    graph.add_node(
+        "retrieve_healthcare_evidence",
+        build_retrieve_healthcare_evidence_node(fhir_client),
+    )
     graph.add_node("evaluate_completeness", evaluate_completeness_node)
     graph.add_node("evaluate_ai_requirement", evaluate_ai_requirement_node)
     graph.add_node("complete", complete_node)
@@ -119,7 +157,15 @@ def build_case_workflow_graph(ai_provider: AIAnalysisProvider):
     graph.add_node("run_ai_analysis", build_run_ai_analysis_node(ai_provider))
     graph.add_node("ai_analysis_complete", ai_analysis_complete_node)
 
-    graph.add_edge(START, "evaluate_completeness")
+    graph.add_edge(START, "retrieve_healthcare_evidence")
+    graph.add_conditional_edges(
+        "retrieve_healthcare_evidence",
+        route_after_healthcare_evidence,
+        {
+            "evaluate_completeness": "evaluate_completeness",
+            "human_review_required": "human_review_required",
+        },
+    )
     graph.add_conditional_edges(
         "evaluate_completeness",
         route_after_completeness,
