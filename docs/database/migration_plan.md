@@ -321,7 +321,7 @@ No tests are added by Task 19C itself — this table is a plan only, per the tas
 This is planning only; no rollback has been exercised or needs to be exercised as a result of this document.
 
 - **Git rollback boundary:** every Wave's schema/code changes must land as its own reviewed commit(s), so a failed Wave can be reverted with `git revert`/`git reset` back to the last known-good commit (currently `4f473fcb2e7b792113a55b72dd035ca27c73591f`) without touching unrelated work.
-- **Schema migration rollback boundary:** once a schema-application mechanism is chosen (see §16 Open Decisions — this choice is **not yet made** and must be resolved before the first physical Wave 1 schema change, not merely "at some point in Wave 1/2"), every schema change should be reversible (an `upgrade`/`downgrade` pair or equivalent), not a hand-run, unrecorded `ALTER`/`CREATE` statement. Wave 0 does not select or configure that mechanism.
+- **Schema migration rollback boundary:** the schema-application mechanism is now chosen — Alembic + SQLAlchemy, per [ADR-005](../decisions/ADR-005-database-schema-migration-strategy.md) — but Alembic has not yet been installed or configured (see §16, §17.B). Once it is, every schema change should be reversible (an `upgrade`/`downgrade` pair) where genuinely safe, not a hand-run, unrecorded `ALTER`/`CREATE` statement. Neither this plan nor ADR-005 installs or configures Alembic; that remains a separate, explicitly approved implementation task.
 - **Test gate before next Wave:** a Wave is not considered safe to build on until its own new tests pass *and* the full existing suite (currently 241 tests) still passes — no Wave may be layered on top of a regression.
 - **Backup/recreate strategy for the synthetic local database:** because `healthcare_ai_fde_lab` contains only disposable synthetic validation data (§9), "backup" here means nothing more than: before any destructive schema change (e.g. the Strategy B rebuild recommended in §9), confirm current schema/data state via a read-only query, and only then proceed with explicit approval. No production-grade backup/restore tooling is required for a synthetic Phase 1 prototype.
 - **No destructive reset without explicit approval:** consistent with this project's established working pattern (every live-SQL-Server-touching script in Task 18B was shown in full and approved before execution), no future Wave may `DROP`/`TRUNCATE`/bulk-delete against the real local SQL Server without the same explicit, per-action approval.
@@ -333,31 +333,31 @@ This is planning only; no rollback has been exercised or needs to be exercised a
 - Current `AuditEventCategory.ERROR` usage (§7.B) — including at least one existing test fixture — must eventually be translated to the correct functional-domain category once `event_category_code` becomes a real FK; underestimating this as automatic risks a silent behavior change or a test failure at that time. The category disposition itself is resolved (§7.B); only the mechanical translation work remains, and it is scoped to the Wave that adds the FK, not Wave 0 or Wave 1.
 - Composite FK enforcement (§5.B, §12) is new SQL Server behavior with no current offline-test equivalent; the SQLite test double may not enforce composite FKs identically unless explicitly configured to do so, risking a false sense of coverage.
 - The existing Task 18B-6 synthetic rows do not satisfy the target schema's new NOT NULL columns; an in-place migration (Strategy A) without a rebuild would need explicit backfill values invented for them, which risks polluting the target schema with meaningless placeholder data for rows that were never meant to be permanent.
-- **No schema-application mechanism has been chosen yet (§16).** This blocks the *first physical* Wave 1 schema change — not Wave 1 planning, which is unblocked (see §17). Beginning physical implementation before this is resolved risks hand-run, unrecorded schema changes with no rollback path, contradicting §13's rollback strategy.
+- **Alembic (the now-chosen schema-application mechanism, per [ADR-005](../decisions/ADR-005-database-schema-migration-strategy.md)) has not yet been installed or configured (§16).** This blocks the *first physical* Wave 1 schema change — not Wave 1 planning, which is unblocked (see §17). Beginning physical implementation before Alembic is actually initialized risks hand-run, unrecorded schema changes with no rollback path, contradicting §13's rollback strategy.
 
 ## 15. Assumptions
 
 - The current two-table implementation and its 241-test suite represent the full scope of "existing behavior" to preserve; no undocumented persistence code exists outside `src/db/` and `src/models/audit.py`.
 - `trace_id` will eventually be generated somewhere in the workflow/API layer before Wave 2 wiring occurs; Wave 0 does not decide where (see §16).
-- A SQLAlchemy-compatible schema-application mechanism (Alembic or otherwise) will be selected before Wave 1 physical implementation begins; Wave 0 does not select or configure one (see §16).
+- Alembic + SQLAlchemy, the approved schema-application mechanism ([ADR-005](../decisions/ADR-005-database-schema-migration-strategy.md)), will be installed and configured before Wave 1 physical implementation begins, in a separate explicitly approved task; this plan does not install or configure it (see §16).
 - The local `healthcare_ai_fde_lab` database remains the only environment affected by any future Wave's schema work; no shared/staging/production SQL Server instance exists yet.
 
 ## 16. Open Decisions
 
-Two decisions originally listed here in the first draft of this plan are now **RESOLVED** and are documented at their authoritative source, not here:
+Three decisions originally listed here are now **RESOLVED** and are documented at their authoritative source, not here:
 
 - **`FAILED` workflow-status semantics** — RESOLVED. Authoritative source: [reference_data.md §4](reference_data.md#4-workflow_statuses). Migration rule recorded in §7.A above.
 - **Generic `ERROR` event-category disposition** — RESOLVED (no target `ERROR` category exists; events remain categorized by functional domain). Authoritative source: [reference_data.md §10](reference_data.md#10-event_categories). Migration rule recorded in §7.B above.
+- **Schema-application mechanism** — RESOLVED. Alembic + SQLAlchemy is the approved primary mechanism for future physical schema creation/evolution against the real SQL Server database; `Base.metadata.create_all()` is retained only for offline-test/bootstrap convenience. Authoritative source: [ADR-005](../decisions/ADR-005-database-schema-migration-strategy.md). **This is an architecture decision only — Alembic has not been installed, initialized, or run. See ADR-005's Implementation Boundary section.**
 
 The following remain genuinely **OPEN** and require an explicit decision at the stated point before the stated Wave. Each row's "current impact" states plainly whether it blocks Wave 1 today.
 
 | decision | status | must resolve before | current impact |
 |---|---|---|---|
-| Schema-application mechanism (how physical schema changes are applied and tracked — e.g. a migration framework, explicitly versioned SQL scripts, or another controlled SQLAlchemy-compatible mechanism) | OPEN | Wave 1 **physical implementation** (the first actual database change) | **Blocks the first physical schema change.** Does not block Wave 1 planning. Once chosen, a dedicated ADR (likely `docs/decisions/ADR-005-database-schema-migration-strategy.md`) should be created to record the decision — not in Task 19C. |
 | `trace_id` generation point (where in the application/API layer a `trace_id` is first created, once the workflow is wired to persistence) | OPEN | Wave 2 (workflow/case persistence integration) | Does not block Wave 1 — Wave 1 (organization/reference masters) has no runtime dependency on `trace_id` generation. |
 | LangGraph step → `workflow_definition_steps.step_code`/`workflow_step_id` translation design (§5.B, §7) | OPEN | Wave 2 (`workflow_runs`/`audit_events` persistence integration) | Does not block Wave 1 — no current Wave 1 table depends on this translation. |
 
-No further decisions are required to complete Wave 0. None of the three remaining OPEN items block Wave 1 **planning**; the schema-application mechanism specifically blocks Wave 1 **physical implementation** (see §17 for the distinction).
+No further decisions are required to complete Wave 0. Neither remaining OPEN item blocks Wave 1 **planning**. The schema-application mechanism's *architecture decision* no longer blocks anything (resolved via ADR-005); its *implementation* (actually installing and configuring Alembic) still gates Wave 1 **physical implementation** — see §17 for that distinction.
 
 ## 17. Wave 1 Readiness
 
@@ -374,17 +374,17 @@ Task 19C (Wave 0) is complete, and **Wave 1 planning is unblocked**, because all
 - [x] Current synthetic data handling strategy is documented, without altering the actual rows (§9).
 - [x] Dependency order for all 36 tables is confirmed against the real data dictionary, not assumed (§10).
 - [x] Test preservation matrix is complete for every currently-tested behavior plus every newly-required behavior (§12).
-- [x] Rollback approach is documented, including the explicit dependency on a not-yet-chosen schema-application mechanism (§13).
-- [x] No unresolved MUST-FIX blocker exists **for planning purposes** (§14 lists risks; the one genuine implementation blocker — the schema-application mechanism — blocks physical implementation, not planning; see 17.B).
+- [x] Rollback approach is documented, including the three distinct rollback concepts defined in [ADR-005](../decisions/ADR-005-database-schema-migration-strategy.md) (§13).
+- [x] No unresolved MUST-FIX blocker exists **for planning purposes** (§14 lists risks; the schema-application mechanism's *architecture decision* is resolved via ADR-005 — only its *implementation* remains outstanding, and that blocks physical implementation, not planning; see 17.B).
 - [x] Repository documentation (`data_model.md`, `data_dictionary.md`, `reference_data.md`, `constraints_and_indexes.md`, this plan) is internally consistent — no contradiction was found during this review.
 - [x] The current test baseline (241 tests) still passes, confirmed after this document was written (see the validation run accompanying this task).
 - [x] No code or schema change occurred as part of Wave 0 — confirmed by `git status` showing only documentation changes.
 
 ### 17.B Wave 1 physical implementation readiness — NOT YET MET
 
-**Wave 1 physical schema implementation is not approved until the schema-application mechanism is chosen and documented (§16).** No `CREATE TABLE`, `ALTER TABLE`, or equivalent physical change against `healthcare_ai_fde_lab` — even for the comparatively simple Wave 1 reference-master tables — should begin before that decision is made, so that every physical change from the first one onward is reversible and trackable per §13's rollback strategy, rather than starting with an untracked hand-run change and retrofitting process afterward.
+The schema-application mechanism **architecture decision** is resolved: Alembic + SQLAlchemy, per [ADR-005](../decisions/ADR-005-database-schema-migration-strategy.md). That decision alone does not make Wave 1 physical implementation ready — **Alembic itself has not yet been installed, initialized, or configured** (no `alembic.ini`, no `migrations/`, no revision files; see ADR-005's Implementation Boundary section). No `CREATE TABLE`, `ALTER TABLE`, or equivalent physical change against `healthcare_ai_fde_lab` — even for the comparatively simple Wave 1 reference-master tables — should begin before a separate, explicitly approved Alembic initialization/configuration task is completed and validated, so that every physical change from the first one onward is applied through the approved mechanism rather than as an untracked hand-run change.
 
-**Wave 1 planning is unblocked. Wave 1 physical schema implementation requires approval of the schema-application mechanism before the first database change.**
+**Wave 1 planning: UNBLOCKED. Architecture decision for the migration mechanism: RESOLVED (ADR-005). Alembic implementation/configuration: NOT YET COMPLETED. Therefore Wave 1 physical DDL must not start until a separate Alembic initialization/configuration task is completed and validated.**
 
 ## 18. Related Documentation
 
@@ -395,4 +395,5 @@ Task 19C (Wave 0) is complete, and **Wave 1 planning is unblocked**, because all
 - [erd/](erd/) — reviewed ERD artifacts
 - [../decisions/ADR-003-sql-server.md](../decisions/ADR-003-sql-server.md) — Microsoft SQL Server decision
 - [../decisions/ADR-004-phase1-canonical-data-model.md](../decisions/ADR-004-phase1-canonical-data-model.md) — canonical data model decision
+- [../decisions/ADR-005-database-schema-migration-strategy.md](../decisions/ADR-005-database-schema-migration-strategy.md) — schema migration/versioning mechanism decision (Alembic + SQLAlchemy)
 - [../architecture.md](../architecture.md) — overall Phase 1 system architecture

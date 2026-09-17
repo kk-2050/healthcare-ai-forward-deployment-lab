@@ -214,6 +214,12 @@ summary.
   output, human review, and immutable audit history. This design has
   been reviewed and approved as the Phase 1 baseline but is
   implemented incrementally through Waves — it is **not** yet built.
+- Alembic + SQLAlchemy has been selected as the schema migration
+  strategy for evolving the physical database going forward (see
+  [ADR-005](docs/decisions/ADR-005-database-schema-migration-strategy.md)).
+  This is an architecture decision only — Alembic has **not** yet been
+  installed or initialized, and Wave 1 physical schema implementation
+  has **not** started.
 
 See:
 - [docs/database/data_model.md](docs/database/data_model.md)
@@ -223,6 +229,7 @@ See:
 - [docs/database/erd/](docs/database/erd/) — reviewed ERD artifacts (overview, full, and Mermaid text formats)
 - [docs/database/migration_plan.md](docs/database/migration_plan.md) — Wave 0 migration plan (planning only; no schema migration has been executed)
 - [docs/decisions/ADR-004-phase1-canonical-data-model.md](docs/decisions/ADR-004-phase1-canonical-data-model.md)
+- [docs/decisions/ADR-005-database-schema-migration-strategy.md](docs/decisions/ADR-005-database-schema-migration-strategy.md) — schema migration mechanism decision
 
 ## 13. Documentation Index
 

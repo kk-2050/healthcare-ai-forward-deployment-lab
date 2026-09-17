@@ -120,6 +120,12 @@ rather than duplicated here: [database/](database/), the
 no migration has been executed), and
 [ADR-004](decisions/ADR-004-phase1-canonical-data-model.md).
 
+**Schema migration mechanism:** Alembic + SQLAlchemy (see
+[ADR-005](decisions/ADR-005-database-schema-migration-strategy.md)).
+Status: architecture decision accepted; implementation not yet
+initialized — Alembic is not installed or configured, and no physical
+schema change has been made under this mechanism.
+
 ## 7. Related Documents
 
 - [requirements.md](requirements.md)
@@ -130,3 +136,4 @@ no migration has been executed), and
 - [decisions/ADR-002-langgraph.md](decisions/ADR-002-langgraph.md)
 - [decisions/ADR-003-sql-server.md](decisions/ADR-003-sql-server.md)
 - [decisions/ADR-004-phase1-canonical-data-model.md](decisions/ADR-004-phase1-canonical-data-model.md)
+- [decisions/ADR-005-database-schema-migration-strategy.md](decisions/ADR-005-database-schema-migration-strategy.md)
