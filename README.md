@@ -206,6 +206,12 @@ summary.
   This has been validated against a real local Microsoft SQL Server
   instance (connectivity, schema creation, and repository read/write
   round-trips).
+- The Alembic migration framework (see
+  [ADR-005](docs/decisions/ADR-005-database-schema-migration-strategy.md))
+  is installed and initialized, and wired to this project's existing
+  SQLAlchemy metadata and secure database configuration —
+  `alembic.ini` and `migrations/` (`env.py`, `script.py.mako`,
+  `versions/`) exist in the repository.
 
 **DESIGNED / PLANNED:**
 - A canonical Phase 1 relational data model (36 tables) covering
@@ -214,12 +220,10 @@ summary.
   output, human review, and immutable audit history. This design has
   been reviewed and approved as the Phase 1 baseline but is
   implemented incrementally through Waves — it is **not** yet built.
-- Alembic + SQLAlchemy has been selected as the schema migration
-  strategy for evolving the physical database going forward (see
-  [ADR-005](docs/decisions/ADR-005-database-schema-migration-strategy.md)).
-  This is an architecture decision only — Alembic has **not** yet been
-  installed or initialized, and Wave 1 physical schema implementation
-  has **not** started.
+- No Alembic migration revision exists yet, no `alembic_version` table
+  exists in `healthcare_ai_fde_lab`, and Wave 1 physical schema
+  implementation has **not** started. The migration framework is
+  initialized; it has not yet been used to change any schema.
 
 See:
 - [docs/database/data_model.md](docs/database/data_model.md)

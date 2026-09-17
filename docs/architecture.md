@@ -122,9 +122,13 @@ no migration has been executed), and
 
 **Schema migration mechanism:** Alembic + SQLAlchemy (see
 [ADR-005](decisions/ADR-005-database-schema-migration-strategy.md)).
-Status: architecture decision accepted; implementation not yet
-initialized — Alembic is not installed or configured, and no physical
-schema change has been made under this mechanism.
+Status: architecture decision accepted, and the migration framework is
+now installed and initialized (`alembic.ini`, `migrations/`), wired to
+this project's existing SQLAlchemy metadata and secure database
+configuration. No migration revision exists yet, no `alembic_version`
+table exists on the real database, and no physical schema change has
+been made under this mechanism — the framework is initialized, not
+used.
 
 ## 7. Related Documents
 
