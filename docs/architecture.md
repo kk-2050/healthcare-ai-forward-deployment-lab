@@ -114,7 +114,8 @@ through Waves. The target schema is a reviewed design baseline — it is
 not deployed yet.
 
 Full detail is maintained in the dedicated database documentation
-rather than duplicated here: [database/](database/) and
+rather than duplicated here: [database/](database/), the
+[reviewed ERD artifacts](database/erd/), and
 [ADR-004](decisions/ADR-004-phase1-canonical-data-model.md).
 
 ## 7. Related Documents

@@ -356,6 +356,14 @@ erDiagram
     REASONS ||--o{ AUDIT_EVENTS : reason
 ```
 
+The simplified diagram above shows table relationships only, not every field. The full, reviewed ERD artifact set is committed under [erd/](erd/):
+
+- [erd/phase1_relational_erd_overview.svg](erd/phase1_relational_erd_overview.svg) / [erd/phase1_relational_erd_overview.png](erd/phase1_relational_erd_overview.png) — relationship-oriented visual overview of all 36 tables
+- [erd/phase1_relational_erd_full.svg](erd/phase1_relational_erd_full.svg) — detailed field-level/reference view (every column, type, nullability, and key)
+- [erd/phase1_relational_erd_mermaid.md](erd/phase1_relational_erd_mermaid.md) — text-based relationship definition suitable for GitHub review/diffing
+
+These artifacts represent the target Phase 1 design baseline, not the currently deployed SQL Server schema.
+
 ## 16. Implementation Waves
 
 **Wave** = dependency-aware implementation batch.
@@ -414,5 +422,6 @@ Deferral is deliberate to avoid unnecessary PHI/PII, terminology-governance, IAM
 - [data_dictionary.md](data_dictionary.md) — authoritative field-level dictionary
 - [reference_data.md](reference_data.md) — proposed controlled seed/reference-data catalog
 - [constraints_and_indexes.md](constraints_and_indexes.md) — relational integrity, uniqueness, CHECK constraint, and index catalog
+- [erd/](erd/) — reviewed ERD artifacts (overview, full, and Mermaid text formats)
 - [../decisions/ADR-004-phase1-canonical-data-model.md](../decisions/ADR-004-phase1-canonical-data-model.md) — the architecture decision record for this model
 - [../architecture.md](../architecture.md) — overall Phase 1 system architecture
