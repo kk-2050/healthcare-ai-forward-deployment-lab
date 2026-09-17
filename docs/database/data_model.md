@@ -369,7 +369,7 @@ These artifacts represent the target Phase 1 design baseline, not the currently 
 **Wave** = dependency-aware implementation batch.
 
 - **Wave 0 — Migration Planning & Contract Preservation**
-  Map existing `workflow_runs` / `audit_events`, preserve repository contract/tests, resolve ID strategy. No LangGraph-to-old-schema wiring is required.
+  Map existing `workflow_runs` / `audit_events`, preserve repository contract/tests, resolve ID strategy. No LangGraph-to-old-schema wiring is required. See [migration_plan.md](migration_plan.md) for the completed Wave 0 migration plan.
 
 - **Wave 1 — Organization, Lifecycle & Core Reference Foundation**
   Organization masters, workflow/audit vocabularies, seed data.
@@ -423,5 +423,6 @@ Deferral is deliberate to avoid unnecessary PHI/PII, terminology-governance, IAM
 - [reference_data.md](reference_data.md) — proposed controlled seed/reference-data catalog
 - [constraints_and_indexes.md](constraints_and_indexes.md) — relational integrity, uniqueness, CHECK constraint, and index catalog
 - [erd/](erd/) — reviewed ERD artifacts (overview, full, and Mermaid text formats)
+- [migration_plan.md](migration_plan.md) — Wave 0 migration plan and persistence-contract preservation strategy
 - [../decisions/ADR-004-phase1-canonical-data-model.md](../decisions/ADR-004-phase1-canonical-data-model.md) — the architecture decision record for this model
 - [../architecture.md](../architecture.md) — overall Phase 1 system architecture

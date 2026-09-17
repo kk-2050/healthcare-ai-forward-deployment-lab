@@ -221,6 +221,7 @@ See:
 - [docs/database/reference_data.md](docs/database/reference_data.md)
 - [docs/database/constraints_and_indexes.md](docs/database/constraints_and_indexes.md)
 - [docs/database/erd/](docs/database/erd/) — reviewed ERD artifacts (overview, full, and Mermaid text formats)
+- [docs/database/migration_plan.md](docs/database/migration_plan.md) — Wave 0 migration plan (planning only; no schema migration has been executed)
 - [docs/decisions/ADR-004-phase1-canonical-data-model.md](docs/decisions/ADR-004-phase1-canonical-data-model.md)
 
 ## 13. Documentation Index

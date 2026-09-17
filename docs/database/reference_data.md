@@ -67,7 +67,13 @@ Canonical Phase 1 workflow-run statuses:
 | `PROCESSING` | Processing | 0 | 0 | Automated workflow is actively executing |
 | `HUMAN_REVIEW_REQUIRED` | Human Review Required | 0 | 1 | Automated processing is paused pending human review |
 | `COMPLETED` | Completed | 1 | 0 | This workflow run completed successfully; use `next_action_code` for the business next step |
-| `FAILED` | Failed | 1 | 1 | A terminal technical/workflow failure prevented safe automated continuation |
+| `FAILED` | Failed | 1 | 1 | Terminal technical/workflow failure where safe automated continuation **or** successful creation/routing of a Human-in-the-Loop review task cannot be established |
+
+**`FAILED` semantics (authoritative):** `FAILED` is reserved for a terminal technical/workflow failure where safe automated continuation cannot be established *and* a Human-in-the-Loop review task also cannot be reliably created or routed. It is not a catch-all for every technical failure.
+
+A FHIR/AI/integration failure that is successfully and safely routed to human review is **not** `FAILED` — it remains `HUMAN_REVIEW_REQUIRED`, with `failure_category_code` (on the related `workflow_runs`/`audit_events` rows) carrying the specific technical classification. For example: a FHIR provider call fails, the failure is classified, and the workflow successfully creates/routes a human-review task → `HUMAN_REVIEW_REQUIRED`. An AI structured-output validation failure that is successfully routed to human review → likewise `HUMAN_REVIEW_REQUIRED`. Only a failure that additionally prevents safe human-review routing itself — for example, a persistence/orchestration failure — reaches `FAILED`.
+
+Note on the `human_review` column above: it flags that a `FAILED` outcome still ultimately warrants human attention (e.g. manual operational investigation), which is a different thing from the *in-workflow, automated* HITL task creation/routing that `FAILED` specifically means could not be safely established.
 
 ### Current-code migration mapping
 
@@ -136,8 +142,7 @@ Only types actually needed by the synthetic scenarios should be seeded.
 
 ## 10. `event_categories`
 
-Failure events remain categorized by their functional domain (for example FHIR or AI); `failure_category_code` carries the failure classification. A generic `ERROR` event category is therefore not seeded in Phase 1.
-
+**No generic `ERROR` event category is seeded in Phase 1 (authoritative).** This intentionally separates two distinct questions: *where/what domain* the event belongs to (this table, `event_category_code`) versus *why/how* it failed (`failure_category_code`). Failure events remain categorized by their functional domain — a FHIR failure is `event_category_code = FHIR`, an AI failure is `AI`, a persistence failure is `PERSISTENCE`, a workflow/orchestration failure is `WORKFLOW` — never a generic `ERROR`; `failure_category_code` separately carries the specific failure classification (e.g. `FHIR_HTTP_ERROR`, `AI_OUTPUT_INVALID`).
 
 | code | name |
 |---|---|

@@ -115,7 +115,9 @@ not deployed yet.
 
 Full detail is maintained in the dedicated database documentation
 rather than duplicated here: [database/](database/), the
-[reviewed ERD artifacts](database/erd/), and
+[reviewed ERD artifacts](database/erd/), the
+[Wave 0 migration plan](database/migration_plan.md) (planning only —
+no migration has been executed), and
 [ADR-004](decisions/ADR-004-phase1-canonical-data-model.md).
 
 ## 7. Related Documents
