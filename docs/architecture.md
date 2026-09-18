@@ -123,12 +123,17 @@ no migration has been executed), and
 **Schema migration mechanism:** Alembic + SQLAlchemy (see
 [ADR-005](decisions/ADR-005-database-schema-migration-strategy.md)).
 Status: architecture decision accepted, and the migration framework is
-now installed and initialized (`alembic.ini`, `migrations/`), wired to
-this project's existing SQLAlchemy metadata and secure database
-configuration. No migration revision exists yet, no `alembic_version`
-table exists on the real database, and no physical schema change has
-been made under this mechanism — the framework is initialized, not
-used.
+installed and initialized (`alembic.ini`, `migrations/`), wired to this
+project's existing SQLAlchemy metadata and secure database
+configuration. The first-revision/brownfield prototype transition
+strategy is also resolved (see
+[ADR-006](decisions/ADR-006-first-revision-and-brownfield-strategy.md)):
+the first revision will implement Wave 1 only, additively, leaving the
+existing `workflow_runs`/`audit_events` tables untouched. **No
+migration revision exists yet, no `alembic_version` table exists on the
+real database, and Wave 1 physical schema implementation has not
+started** — the design/architecture gate for writing the first
+revision is cleared; the revision itself is not yet written.
 
 ## 7. Related Documents
 
@@ -141,3 +146,4 @@ used.
 - [decisions/ADR-003-sql-server.md](decisions/ADR-003-sql-server.md)
 - [decisions/ADR-004-phase1-canonical-data-model.md](decisions/ADR-004-phase1-canonical-data-model.md)
 - [decisions/ADR-005-database-schema-migration-strategy.md](decisions/ADR-005-database-schema-migration-strategy.md)
+- [decisions/ADR-006-first-revision-and-brownfield-strategy.md](decisions/ADR-006-first-revision-and-brownfield-strategy.md)
