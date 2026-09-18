@@ -65,14 +65,23 @@ clinical approval or denial decisions — see
 - Local Microsoft SQL Server persistence validation (connectivity,
   schema creation, and repository read/write round-trips against a
   real local instance)
+- Alembic migration framework, operational and applied: Wave 1 of the
+  canonical database foundation (14 organization/reference tables) has
+  been migrated onto the real local SQL Server database and validated
+  (installed revision `c841e86a8516`); the pre-existing `workflow_runs`
+  and `audit_events` prototype tables were preserved unchanged
 - pytest test suite (241 tests passing as of this update)
 - Architecture design artifacts (ADRs, architecture/security/
   requirements docs)
 
 **DESIGNED / PLANNED (not yet implemented):**
-- Canonical Phase 1 relational data model (36 tables) — see
-  [docs/database/](docs/database/)
-- Incremental database implementation through Waves
+- Remaining canonical Phase 1 relational data model (Wave 2 and later,
+  22 of 36 tables remaining) — see [docs/database/](docs/database/)
+- Reference/master seed data loading for the Wave 1 tables
+- Wave 6 relational hardening (CHECK constraints, JSON validation,
+  secondary indexes, `event_types` composite uniqueness)
+- Canonical replacement of the prototype `workflow_runs`/`audit_events`
+  tables (planned at the Wave 2 boundary)
 - Human-review persistence/lifecycle (today the workflow only carries
   a `human_review_required` routing flag; there is no dedicated
   review-task table or reviewer-decision persistence yet)
@@ -201,29 +210,43 @@ summary.
 ## 12. Database Design Documentation
 
 **IMPLEMENTED:**
-- A minimal persistence foundation: `workflow_runs` and `audit_events`
-  tables, accessed through a repository pattern (`AuditRepository`).
-  This has been validated against a real local Microsoft SQL Server
-  instance (connectivity, schema creation, and repository read/write
-  round-trips).
+- A minimal prototype persistence foundation: `workflow_runs` and
+  `audit_events` tables, accessed through a repository pattern
+  (`AuditRepository`). This has been validated against a real local
+  Microsoft SQL Server instance (connectivity, schema creation, and
+  repository read/write round-trips). These remain the pre-canonical
+  prototype tables until Wave 2.
 - The Alembic migration framework (see
   [ADR-005](docs/decisions/ADR-005-database-schema-migration-strategy.md))
-  is installed and initialized, and wired to this project's existing
-  SQLAlchemy metadata and secure database configuration —
-  `alembic.ini` and `migrations/` (`env.py`, `script.py.mako`,
-  `versions/`) exist in the repository.
+  is installed, initialized, and now in active use — `alembic.ini` and
+  `migrations/` (`env.py`, `script.py.mako`, `versions/`) exist in the
+  repository.
+- Wave 1 of the canonical database foundation — 14 organization and
+  core reference tables (`reasons`, `countries`, `clients`,
+  `locations`, `departments`, `case_statuses`, `workflow_statuses`,
+  `workflow_actions`, `event_categories`, `event_types`,
+  `actor_types`, `source_components`, `result_codes`,
+  `failure_categories`) — has been migrated onto the real local SQL
+  Server database `healthcare_ai_fde_lab` and validated: installed
+  Alembic revision `c841e86a8516`, all primary keys, foreign keys, and
+  business-key uniqueness constraints confirmed present, and the
+  existing `workflow_runs`/`audit_events` prototype tables confirmed
+  preserved (unchanged row counts and columns). The 14 new tables
+  contain no seed/reference data yet.
 
 **DESIGNED / PLANNED:**
-- A canonical Phase 1 relational data model (36 tables) covering
-  organizational masters, case/workflow persistence, deterministic
-  rule evaluations, integration execution records, validated AI
-  output, human review, and immutable audit history. This design has
-  been reviewed and approved as the Phase 1 baseline but is
-  implemented incrementally through Waves — it is **not** yet built.
-- No Alembic migration revision exists yet, no `alembic_version` table
-  exists in `healthcare_ai_fde_lab`, and Wave 1 physical schema
-  implementation has **not** started. The migration framework is
-  initialized; it has not yet been used to change any schema.
+- The remaining canonical Phase 1 relational data model (Wave 2 and
+  later — 22 of 36 tables) covering case/workflow persistence,
+  deterministic rule evaluations, integration execution records,
+  validated AI output, human review, and immutable audit history. This
+  design has been reviewed and approved as the Phase 1 baseline but is
+  implemented incrementally through Waves.
+- Reference/master seed data loading for the Wave 1 tables.
+- Wave 6 relational hardening (CHECK constraints, ISJSON validation,
+  secondary indexes, and the `event_types` composite-FK-support
+  uniqueness constraint) — deliberately deferred, not yet applied.
+- Canonical replacement of the prototype `workflow_runs`/`audit_events`
+  tables, planned at the Wave 2 boundary.
 
 See:
 - [docs/database/data_model.md](docs/database/data_model.md)
@@ -231,7 +254,7 @@ See:
 - [docs/database/reference_data.md](docs/database/reference_data.md)
 - [docs/database/constraints_and_indexes.md](docs/database/constraints_and_indexes.md)
 - [docs/database/erd/](docs/database/erd/) — reviewed ERD artifacts (overview, full, and Mermaid text formats)
-- [docs/database/migration_plan.md](docs/database/migration_plan.md) — Wave 0 migration plan (planning only; no schema migration has been executed)
+- [docs/database/migration_plan.md](docs/database/migration_plan.md) — Wave 0 migration plan and Wave 1 physical implementation status
 - [docs/decisions/ADR-004-phase1-canonical-data-model.md](docs/decisions/ADR-004-phase1-canonical-data-model.md)
 - [docs/decisions/ADR-005-database-schema-migration-strategy.md](docs/decisions/ADR-005-database-schema-migration-strategy.md) — schema migration mechanism decision
 

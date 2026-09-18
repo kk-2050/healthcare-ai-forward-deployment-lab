@@ -101,39 +101,62 @@ ultimately decided.
 
 ## 6. Database Design
 
-**Current implementation:** a minimal persistence foundation exists —
-the `workflow_runs` and `audit_events` tables, accessed through a
-repository pattern, validated against a real local Microsoft SQL
-Server instance.
+**Current implementation:** a minimal prototype persistence foundation
+— the `workflow_runs` and `audit_events` tables, accessed through a
+repository pattern — remains in place and validated against a real
+local Microsoft SQL Server instance. Alongside it, **Wave 1 of the
+canonical database foundation is now physically implemented**: 14
+organization and core reference tables have been created on the real
+local SQL Server database and validated (see below). The prototype
+`workflow_runs`/`audit_events` tables remain the pre-canonical
+versions until Wave 2 — they are not yet replaced or linked to the new
+Wave 1 tables.
 
 **Target Phase 1 design:** a canonical 36-table relational model
 (organizational masters, case/workflow persistence, deterministic
 rule evaluations, integration execution records, validated AI output,
 human review, and immutable audit history), implemented incrementally
-through Waves. The target schema is a reviewed design baseline — it is
-not deployed yet.
+through Waves. The target schema is a reviewed design baseline; 14 of
+36 tables (Wave 1) are now physically built, the remaining 22 (Waves
+2–6) are not yet built.
 
 Full detail is maintained in the dedicated database documentation
 rather than duplicated here: [database/](database/), the
 [reviewed ERD artifacts](database/erd/), the
-[Wave 0 migration plan](database/migration_plan.md) (planning only —
-no migration has been executed), and
+[migration plan](database/migration_plan.md) (Wave 0 planning plus
+Wave 1 physical implementation status), and
 [ADR-004](decisions/ADR-004-phase1-canonical-data-model.md).
 
 **Schema migration mechanism:** Alembic + SQLAlchemy (see
 [ADR-005](decisions/ADR-005-database-schema-migration-strategy.md)).
-Status: architecture decision accepted, and the migration framework is
+Status: architecture decision accepted, the migration framework is
 installed and initialized (`alembic.ini`, `migrations/`), wired to this
 project's existing SQLAlchemy metadata and secure database
-configuration. The first-revision/brownfield prototype transition
-strategy is also resolved (see
-[ADR-006](decisions/ADR-006-first-revision-and-brownfield-strategy.md)):
-the first revision will implement Wave 1 only, additively, leaving the
-existing `workflow_runs`/`audit_events` tables untouched. **No
-migration revision exists yet, no `alembic_version` table exists on the
-real database, and Wave 1 physical schema implementation has not
-started** — the design/architecture gate for writing the first
-revision is cleared; the revision itself is not yet written.
+configuration, and now in active use. The first-revision/brownfield
+prototype transition strategy is resolved (see
+[ADR-006](decisions/ADR-006-first-revision-and-brownfield-strategy.md))
+and has been executed: the first revision (`c841e86a8516`) implemented
+Wave 1 only, additively, leaving the existing
+`workflow_runs`/`audit_events` tables untouched.
+
+**Wave 1 physical database foundation:** IMPLEMENTED.
+**Real SQL Server validation:** COMPLETED.
+**Installed Alembic revision:** `c841e86a8516`.
+
+Validated on the real local `healthcare_ai_fde_lab` database: all 14
+Wave 1 tables exist; all primary keys and foreign keys (including the
+self-referencing `departments` FK and the universal
+`delete_reason_code` → `reasons` FK) match the documented design; all
+four Wave 1 business-key `UNIQUE` constraints exist; the prototype
+`workflow_runs`/`audit_events` tables and their row counts are
+unchanged; the 14 new tables contain no rows (no seed/reference data
+has been loaded).
+
+**Wave 6 relational hardening remains deferred** — CHECK constraints,
+ISJSON validation, secondary indexes, and the `event_types`
+composite-FK-support `UNIQUE` constraint are intentionally not yet
+applied; their absence was explicitly confirmed during Wave 1
+validation, not overlooked.
 
 ## 7. Related Documents
 

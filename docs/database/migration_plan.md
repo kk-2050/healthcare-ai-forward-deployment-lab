@@ -9,9 +9,9 @@ Author: K.Kashiwagi
 
 ## 1. Status
 
-**PLANNING DOCUMENT — no schema, code, or data changes have occurred as a result of this document.**
+**PLANNING DOCUMENT (Wave 0) — no schema, code, or data changes have occurred as a result of this document itself.** Wave 1 physical implementation has since been completed and validated through separate, explicitly approved tasks (Task 20A: authoring; Task 20B: SQL Server execution and validation) — see §17.C for the current, authoritative Wave 1 status.
 
-This is Wave 0 of the approved Wave plan in [data_model.md §16](data_model.md#16-implementation-waves). It documents how the currently implemented two-table SQL Server persistence foundation relates to the approved v2.2 canonical 36-table model, and what must be true before Wave 1 begins. It does not create, alter, or drop any table, and it does not change any application code.
+This is Wave 0 of the approved Wave plan in [data_model.md §16](data_model.md#16-implementation-waves). It documents how the currently implemented two-table SQL Server persistence foundation relates to the approved v2.2 canonical 36-table model, and what must be true before Wave 1 begins. It does not itself create, alter, or drop any table, and it does not change any application code.
 
 ## 2. Purpose
 
@@ -321,7 +321,7 @@ No tests are added by Task 19C itself — this table is a plan only, per the tas
 This is planning only; no rollback has been exercised or needs to be exercised as a result of this document.
 
 - **Git rollback boundary:** every Wave's schema/code changes must land as its own reviewed commit(s), so a failed Wave can be reverted with `git revert`/`git reset` back to the last known-good commit (currently `4f473fcb2e7b792113a55b72dd035ca27c73591f`) without touching unrelated work.
-- **Schema migration rollback boundary:** the schema-application mechanism is chosen and the framework is now installed and initialized — Alembic + SQLAlchemy, per [ADR-005](../decisions/ADR-005-database-schema-migration-strategy.md) — but no migration revision exists yet (see §16, §17.B). Once revisions exist, every schema change should be reversible (an `upgrade`/`downgrade` pair) where genuinely safe, not a hand-run, unrecorded `ALTER`/`CREATE` statement. Neither this plan nor Task 19E (Alembic initialization) creates any migration revision; that remains a separate, explicitly approved task.
+- **Schema migration rollback boundary:** the schema-application mechanism is chosen and the framework is installed and initialized — Alembic + SQLAlchemy, per [ADR-005](../decisions/ADR-005-database-schema-migration-strategy.md). The first revision (`c841e86a8516`, Wave 1) has now been authored, reviewed, applied to the real local SQL Server database, and validated (see §17.C); it has a corresponding `downgrade()` reversal path, though downgrading has not been exercised. Every future schema change continues through the same reviewed `upgrade`/`downgrade` revision pattern, never a hand-run, unrecorded `ALTER`/`CREATE` statement.
 - **Test gate before next Wave:** a Wave is not considered safe to build on until its own new tests pass *and* the full existing suite (currently 241 tests) still passes — no Wave may be layered on top of a regression.
 - **Backup/recreate strategy for the synthetic local database:** because `healthcare_ai_fde_lab` contains only disposable synthetic validation data (§9), "backup" here means nothing more than: before any destructive schema change (e.g. the Strategy B rebuild recommended in §9), confirm current schema/data state via a read-only query, and only then proceed with explicit approval. No production-grade backup/restore tooling is required for a synthetic Phase 1 prototype.
 - **No destructive reset without explicit approval:** consistent with this project's established working pattern (every live-SQL-Server-touching script in Task 18B was shown in full and approved before execution), no future Wave may `DROP`/`TRUNCATE`/bulk-delete against the real local SQL Server without the same explicit, per-action approval.
@@ -333,13 +333,13 @@ This is planning only; no rollback has been exercised or needs to be exercised a
 - Current `AuditEventCategory.ERROR` usage (§7.B) — including at least one existing test fixture — must eventually be translated to the correct functional-domain category once `event_category_code` becomes a real FK; underestimating this as automatic risks a silent behavior change or a test failure at that time. The category disposition itself is resolved (§7.B); only the mechanical translation work remains, and it is scoped to the Wave that adds the FK, not Wave 0 or Wave 1.
 - Composite FK enforcement (§5.B, §12) is new SQL Server behavior with no current offline-test equivalent; the SQLite test double may not enforce composite FKs identically unless explicitly configured to do so, risking a false sense of coverage.
 - The existing Task 18B-6 synthetic rows do not satisfy the target schema's new NOT NULL columns; an in-place migration (Strategy A) without a rebuild would need explicit backfill values invented for them, which risks polluting the target schema with meaningless placeholder data for rows that were never meant to be permanent.
-- **No Alembic migration revision exists yet (§16).** The framework (Alembic + SQLAlchemy, per [ADR-005](../decisions/ADR-005-database-schema-migration-strategy.md)) is installed and initialized, and the first-revision/brownfield strategy is resolved (ADR-006), but the actual first revision has not been written. Beginning physical implementation without following ADR-006's scope (Wave 1 only, additive, existing tables untouched) risks an incorrectly-scoped or destructive first migration.
+- **Wave 1 is now physically implemented (§17.C).** The first Alembic revision (`c841e86a8516`) followed ADR-006's approved scope exactly (Wave 1 only, additive, existing `workflow_runs`/`audit_events` tables untouched) and was validated against the real database with no deviation. The remaining risk is forward-looking: Wave 2 must still resolve the `trace_id` generation point and the LangGraph-step-to-`workflow_definition_steps` mapping (§16) before it can implement the target `workflow_runs`/`audit_events` shape and the controlled prototype rebuild.
 
 ## 15. Assumptions
 
 - The current two-table implementation and its 241-test suite represent the full scope of "existing behavior" to preserve; no undocumented persistence code exists outside `src/db/` and `src/models/audit.py`.
 - `trace_id` will eventually be generated somewhere in the workflow/API layer before Wave 2 wiring occurs; Wave 0 does not decide where (see §16).
-- Alembic + SQLAlchemy, the approved schema-application mechanism ([ADR-005](../decisions/ADR-005-database-schema-migration-strategy.md)), is now installed and initialized (Task 19E), and the first-revision/brownfield prototype strategy is resolved ([ADR-006](../decisions/ADR-006-first-revision-and-brownfield-strategy.md), Task 19F); a separate, explicitly approved implementation task will author and validate the actual first Wave 1 revision (see §16).
+- Alembic + SQLAlchemy, the approved schema-application mechanism ([ADR-005](../decisions/ADR-005-database-schema-migration-strategy.md)), is installed and initialized (Task 19E), the first-revision/brownfield prototype strategy is resolved ([ADR-006](../decisions/ADR-006-first-revision-and-brownfield-strategy.md), Task 19F), and the first Wave 1 revision has been authored, applied, and validated (Tasks 20A/20B — see §17.C).
 - The local `healthcare_ai_fde_lab` database remains the only environment affected by any future Wave's schema work; no shared/staging/production SQL Server instance exists yet.
 
 ## 16. Open Decisions
@@ -349,8 +349,8 @@ Three decisions originally listed here are now **RESOLVED** and are documented a
 - **`FAILED` workflow-status semantics** — RESOLVED. Authoritative source: [reference_data.md §4](reference_data.md#4-workflow_statuses). Migration rule recorded in §7.A above.
 - **Generic `ERROR` event-category disposition** — RESOLVED (no target `ERROR` category exists; events remain categorized by functional domain). Authoritative source: [reference_data.md §10](reference_data.md#10-event_categories). Migration rule recorded in §7.B above.
 - **Schema-application mechanism (architecture decision)** — RESOLVED. Alembic + SQLAlchemy is the approved primary mechanism for future physical schema creation/evolution against the real SQL Server database; `Base.metadata.create_all()` is retained only for offline-test/bootstrap convenience. Authoritative source: [ADR-005](../decisions/ADR-005-database-schema-migration-strategy.md).
-- **Alembic migration framework (installation/initialization)** — RESOLVED (Task 19E). Alembic 1.20.0 is installed and pinned in `requirements.txt`; `alembic.ini` and `migrations/` (`env.py`, `script.py.mako`, `versions/`) exist and are wired to this project's existing SQLAlchemy `Base.metadata` and its existing secure database configuration (`src/config/database.py` + `src/db/engine.py`). **No migration revision exists. No `alembic_version` table exists on the real database. The framework is initialized, not used.**
-- **First-revision / brownfield prototype strategy** — RESOLVED (Task 19F). The first Alembic revision(s) implement Wave 1 only (additive; the existing `workflow_runs`/`audit_events` tables remain untouched and ignored during Wave 1); a controlled local prototype database rebuild happens at the Wave 2 boundary, with explicit approval sought at that time; a fresh database thereafter uses the same Alembic revision chain from base. No `alembic stamp`/fake baseline is used. Authoritative source: [ADR-006](../decisions/ADR-006-first-revision-and-brownfield-strategy.md).
+- **Alembic migration framework (installation/initialization)** — RESOLVED (Task 19E). Alembic 1.20.0 is installed and pinned in `requirements.txt`; `alembic.ini` and `migrations/` (`env.py`, `script.py.mako`, `versions/`) exist and are wired to this project's existing SQLAlchemy `Base.metadata` and its existing secure database configuration (`src/config/database.py` + `src/db/engine.py`). **The framework is now in active use: the first revision (`c841e86a8516`) has been applied to the real database and the `alembic_version` table exists — see §17.C.**
+- **First-revision / brownfield prototype strategy** — RESOLVED (Task 19F) and executed (Tasks 20A/20B). The first Alembic revision (`c841e86a8516`) implements Wave 1 only (additive; the existing `workflow_runs`/`audit_events` tables remain untouched); a controlled local prototype database rebuild remains planned at the Wave 2 boundary, with explicit approval to be sought at that time; a fresh database thereafter uses the same Alembic revision chain from base. No `alembic stamp`/fake baseline was used. Authoritative source: [ADR-006](../decisions/ADR-006-first-revision-and-brownfield-strategy.md).
 
 The following remain genuinely **OPEN** and require an explicit decision at the stated point before the stated Wave. Each row's "current impact" states plainly whether it blocks Wave 1 today.
 
@@ -383,13 +383,32 @@ Task 19C (Wave 0) is complete, and **Wave 1 planning is unblocked**, because all
 - [x] The current test baseline (241 tests) still passes, confirmed after this document was written (see the validation run accompanying this task).
 - [x] No code or schema change occurred as part of Wave 0 — confirmed by `git status` showing only documentation changes.
 
-### 17.B Wave 1 physical implementation readiness — DESIGN GATE CLEARED; IMPLEMENTATION NOT STARTED
+### 17.B Wave 1 physical implementation readiness — DESIGN GATE CLEARED (historical)
 
-Three things are now true, and must not be conflated: the schema-application mechanism **architecture decision** is resolved (ADR-005); the Alembic **framework is installed and initialized** (Task 19E) — `alembic.ini` and `migrations/` (`env.py`, `script.py.mako`, `versions/`) exist, `env.py` uses this project's existing `Base.metadata` and existing secure database configuration, and Alembic 1.20.0 is pinned in `requirements.txt`; and the **first-revision/brownfield prototype strategy is resolved** (ADR-006, Task 19F) — the first revision(s) will implement Wave 1 only, additively, leaving `dbo.workflow_runs`/`dbo.audit_events` untouched, with a controlled prototype rebuild deferred to the Wave 2 boundary under explicit future approval.
+Three things became true before implementation began, and were not conflated: the schema-application mechanism **architecture decision** was resolved (ADR-005); the Alembic **framework was installed and initialized** (Task 19E) — `alembic.ini` and `migrations/` (`env.py`, `script.py.mako`, `versions/`) exist, `env.py` uses this project's existing `Base.metadata` and existing secure database configuration, and Alembic 1.20.0 is pinned in `requirements.txt`; and the **first-revision/brownfield prototype strategy was resolved** (ADR-006, Task 19F) — the first revision would implement Wave 1 only, additively, leaving `dbo.workflow_runs`/`dbo.audit_events` untouched, with a controlled prototype rebuild deferred to the Wave 2 boundary under explicit future approval.
 
-**This clears the design/architecture gate for writing the first Wave 1 migration revision. It does not mean Wave 1 has been implemented.** No migration revision exists yet, no `alembic_version` table exists on the real database, and no `CREATE TABLE`, `ALTER TABLE`, `alembic upgrade`, or `alembic stamp` has been run against `healthcare_ai_fde_lab`. Writing the actual first revision (its concrete DDL, generated and reviewed per ADR-005's Autogenerate Policy) remains a separate, explicitly approved implementation task.
+This cleared the design/architecture gate for writing the first Wave 1 migration revision (Task 20A), which was then authored, reviewed, and executed (Task 20B) — see §17.C for the completed result.
 
-**Wave 1 planning: UNBLOCKED. Architecture decision for the migration mechanism: RESOLVED (ADR-005). Alembic framework installation/initialization: COMPLETED (Task 19E). First-revision/brownfield strategy: RESOLVED (ADR-006). Wave 1 physical schema implementation: design gate cleared; no revision written, no schema changed. The next step is a separate, explicitly approved task to author and validate the first Wave 1 migration revision.**
+### 17.C Wave 1 physical implementation — COMPLETE
+
+**Status: PHYSICAL IMPLEMENTATION COMPLETE.**
+
+**Installed Alembic revision:** `c841e86a8516` (`migrations/versions/c841e86a8516_create_wave_1_database_foundation.py`), applied to the real local SQL Server database `healthcare_ai_fde_lab` via `alembic upgrade head` (Task 20B).
+
+**Validation performed and passed** (read-only, against the real database):
+- All 14 Wave 1 tables created (`reasons`, `countries`, `clients`, `locations`, `departments`, `case_statuses`, `workflow_statuses`, `workflow_actions`, `event_categories`, `event_types`, `actor_types`, `source_components`, `result_codes`, `failure_categories`).
+- Primary key validation: 14/14 matched.
+- Foreign key validation: 20/20 expected FKs found (ordinary FKs, the self-referencing `departments.parent_department_id` FK, and the universal `delete_reason_code` → `reasons` FK on every applicable table).
+- Business-key `UNIQUE` constraint validation: all 4 present and correctly named/ordered (`uq_countries_iso3_code`, `uq_clients_client_code`, `uq_locations_client_id_location_code`, `uq_departments_client_id_department_code`).
+- Prototype preservation: `dbo.workflow_runs` (1 row) and `dbo.audit_events` (2 rows) both preserved unchanged in row count and column schema.
+- No seed/reference rows inserted — all 14 new tables confirmed empty (0 rows each).
+- Wave 6 hardening confirmed still absent: 0 CHECK constraints on the 14 Wave 1 tables, the three deferred secondary indexes (`ix_locations_client_id_country_code`, `ix_departments_client_id`, `ix_departments_parent_department_id`) absent, and the `event_types` composite-FK-support `UNIQUE` constraint absent.
+- Full test suite: 241 passed.
+- Repository working tree confirmed clean after execution (no incidental file changes).
+
+**Wave 1: COMPLETE. Wave 2: PLANNING / IMPLEMENTATION NEXT.**
+
+Remaining before Wave 2 can implement the target `workflow_runs`/`audit_events` shape and the controlled prototype rebuild: the `trace_id` generation point and the LangGraph-step-to-`workflow_definition_steps` mapping must still be resolved (both remain OPEN, §16). Reference-data loading for the now-empty Wave 1 tables also remains an open, unscheduled implementation item (§16).
 
 ## 18. Related Documentation
 
