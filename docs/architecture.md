@@ -158,6 +158,19 @@ composite-FK-support `UNIQUE` constraint are intentionally not yet
 applied; their absence was explicitly confirmed during Wave 1
 validation, not overlooked.
 
+**Wave 2 runtime identity/traceability decisions:** the two
+architecture decisions previously blocking Wave 2 design —
+`trace_id` generation and the LangGraph-node-to-`workflow_definition_steps`
+mapping — are resolved (see
+[ADR-007](decisions/ADR-007-trace-id-and-workflow-step-mapping.md)).
+In summary: `trace_id` is an application-generated UUID4, created once
+per workflow run at the future orchestration boundary immediately
+before the graph runs (this boundary does not exist in `src/` yet);
+and every current LangGraph node is explicitly mapped to a stable
+`step_code`, rather than persisting Python function names. Neither
+decision has been implemented in code yet — both are design
+constraints for the Wave 2 implementation task.
+
 ## 7. Related Documents
 
 - [requirements.md](requirements.md)
@@ -170,3 +183,4 @@ validation, not overlooked.
 - [decisions/ADR-004-phase1-canonical-data-model.md](decisions/ADR-004-phase1-canonical-data-model.md)
 - [decisions/ADR-005-database-schema-migration-strategy.md](decisions/ADR-005-database-schema-migration-strategy.md)
 - [decisions/ADR-006-first-revision-and-brownfield-strategy.md](decisions/ADR-006-first-revision-and-brownfield-strategy.md)
+- [decisions/ADR-007-trace-id-and-workflow-step-mapping.md](decisions/ADR-007-trace-id-and-workflow-step-mapping.md)
