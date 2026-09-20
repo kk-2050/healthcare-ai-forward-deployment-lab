@@ -293,7 +293,7 @@ The approved Wave plan ([data_model.md §16](data_model.md#16-implementation-wav
 - **Wave 2** (Case & Workflow Schema Expansion) delivers `prior_authorization_cases`, `workflow_definitions`/`workflow_definition_steps`, target `workflow_runs`, and target `audit_events` together — which is dependency-correct only if `workflow_definitions` and `workflow_definition_steps` are created **before** `workflow_runs` and `audit_events` *within* Wave 2 (both depend on them). This is an intra-Wave ordering note, not a Wave-boundary change.
 - **Waves 3–6** match Tiers 3–6 respectively (requirements, integration/AI/human review, client intake, hardening) with no dependency conflicts found.
 
-**No Wave-boundary redesign is required.** The only refinement worth recording is the intra-Wave 2 ordering note above.
+**One Wave-boundary refinement was required and applied (Task 21B):** `document_types` (originally Wave 3, per Tier 0's dependency-order listing) was pulled forward into Wave 2 because `case_documents.document_type_code` — a Wave 2 table's required, NOT NULL column — references it. A Wave must be internally dependency-consistent; `document_types` has no dependencies of its own, so it moved to the earliest Wave that needs it, exactly like `case_statuses` was already pulled into Wave 1 for `prior_authorization_cases`' sake. See [§17.D](#17d-wave-2-physical-implementation--complete) for the executed result. Aside from this one table, no other Wave-boundary redesign was required.
 
 ## 12. Test Preservation Matrix
 
@@ -406,9 +406,38 @@ This cleared the design/architecture gate for writing the first Wave 1 migration
 - Full test suite: 241 passed.
 - Repository working tree confirmed clean after execution (no incidental file changes).
 
-**Wave 1: COMPLETE. Wave 2: PLANNING / IMPLEMENTATION NEXT.**
+**Wave 1: COMPLETE. Wave 2: COMPLETE — see §17.D.**
 
-The `trace_id` generation point and the LangGraph-step-to-`workflow_definition_steps` mapping are now RESOLVED (Task 21A, §16, [ADR-007](../decisions/ADR-007-trace-id-and-workflow-step-mapping.md)) — decided, not yet implemented in code. Reference-data loading for the now-empty Wave 1 tables remains the one open, unscheduled implementation item (§16).
+The `trace_id` generation point and the LangGraph-step-to-`workflow_definition_steps` mapping were RESOLVED (Task 21A, §16, [ADR-007](../decisions/ADR-007-trace-id-and-workflow-step-mapping.md)) — decided, not yet implemented as runtime code. Reference-data loading for the now-empty Wave 1/Wave 2 tables remains the one open, unscheduled implementation item (§16).
+
+### 17.D Wave 2 physical implementation — COMPLETE
+
+**Status: PHYSICAL IMPLEMENTATION COMPLETE.**
+
+**Installed Alembic revision:** `b9aba5b07ac8` (`migrations/versions/b9aba5b07ac8_create_wave_2_canonical_case_workflow_.py`, `down_revision = c841e86a8516`), applied to the real local SQL Server database `healthcare_ai_fde_lab` via `alembic upgrade head` (Task 21B).
+
+**8 Wave 2 tables physically installed:** `document_types` (pulled forward from Wave 3 — see below), `workflow_definitions`, `workflow_definition_steps`, `prior_authorization_cases`, `case_diagnoses`, `case_documents`, `workflow_runs` (canonical replacement), `audit_events` (canonical replacement). The physical database now contains 22 application tables + `alembic_version` = 23 `dbo` tables.
+
+**`document_types` Wave reassignment (resolved dependency conflict, not silently decided):** `document_types` was originally scoped to Wave 3 (see the Wave 1 revision's own docstring and §16's prior wording). During Wave 2 authoring, `case_documents.document_type_code` was found to be a required (NOT NULL) foreign key to `document_types`, which would not yet exist under the original Wave 3 assignment. Because a Wave must be internally dependency-consistent, `document_types` — a zero-dependency reference master — was pulled forward into Wave 2, schema only, following the same precedent already used for `case_statuses` being pulled into Wave 1 for `prior_authorization_cases`' sake. **No `document_types` reference rows were inserted; this is a schema-only reassignment.** Reference-data loading remains a separate, still-OPEN decision (§16) and is not otherwise implemented for Wave 3.
+
+**Canonical `workflow_runs`/`audit_events`:** the Task 18A/18B prototype tables (7 and 9 columns) were replaced via the ADR-006-approved controlled rebuild (`DROP` + `CREATE` inside the same migration) with their canonical Wave 2 shapes (23 and 19 columns respectively, per [data_dictionary.md](data_dictionary.md)). The prototype's disposable synthetic Task 18B rows were intentionally removed as part of this rebuild — not preserved, per ADR-006.
+
+**Validation performed and passed** (read-only, against the real database):
+- All 8 Wave 2 tables created; all 14 Wave 1 tables confirmed still present, untouched.
+- Primary key validation: 8/8 matched.
+- Foreign key validation: 40/40 expected FKs found.
+- Business-key `UNIQUE` constraint validation: 2/2 present (`workflow_definitions(workflow_code, version_no)`, `workflow_definition_steps(workflow_definition_id, step_code)`).
+- Exactly one index present on `audit_events`: `ix_audit_events_trace_id` (preserved from the pre-Wave Task 18A prototype, not new Wave 2 or Wave 6 scope).
+- 0 CHECK constraints introduced.
+- All 8 new/replaced tables confirmed empty (0 rows each) — no seed/reference data inserted.
+- Wave 6 hardening confirmed still absent: the composite FK pair (`audit_events(trace_id, case_id)` → `workflow_runs`; `audit_events(event_type_code, event_category_code)` → `event_types`), `workflow_runs` composite `UNIQUE(trace_id, case_id)`, lifecycle/ISJSON CHECK constraints, the filtered `case_diagnoses` primary-diagnosis constraint, and every deferred secondary index were all confirmed absent.
+- Full test suite: 279 passed, 1 warning (241 baseline + 38 new Wave 2 schema tests).
+
+**SQLite DDL execution: NOT APPLICABLE / DIALECT-INCOMPATIBLE.** These migrations deliberately use Microsoft SQL Server-specific types (`mssql.DATETIME2`, `mssql.NVARCHAR`) that SQLite's compiler cannot render — this is a dialect boundary, not a defect, and was confirmed directly (the already-executed, already-SQL-Server-validated Wave 1 migration fails identically under SQLite, before Wave 2 is even reached). The applicable validation layers for these revisions are: Python syntax validation, Alembic revision-chain validation, SQLAlchemy metadata/unit tests (valid for the ORM layer, which deliberately uses generic, dialect-neutral types), manual migration inspection, and controlled execution against real SQL Server. The migration is not altered to become SQLite-compatible.
+
+**Wave 1: COMPLETE. Wave 2: COMPLETE. Wave 3: PLANNING / IMPLEMENTATION NEXT** (now minus `document_types`, which moved to Wave 2 — see above).
+
+Still NOT implemented (unchanged by this task): reference-data loading, LangGraph/API → persistence wiring, runtime `trace_id` generation at the orchestration boundary, runtime node → workflow-step mapping, Human-in-the-Loop persistence/pause/resume, final API end-to-end workflow processing, Streamlit UI, Wave 3+ tables (beyond `document_types`), Wave 6 relational hardening, and all productionization items. ADR-007's decisions are resolved as architecture; none of their runtime wiring exists in `src/` yet.
 
 ## 18. Related Documentation
 

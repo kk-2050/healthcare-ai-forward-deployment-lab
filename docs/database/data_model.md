@@ -375,10 +375,10 @@ These artifacts represent the target Phase 1 design baseline, not the currently 
   Organization masters, workflow/audit vocabularies, seed data.
 
 - **Wave 2 — Case & Workflow Schema Expansion**
-  Cases, diagnoses, documents, workflow definitions/steps, target `workflow_runs`, target `audit_events`.
+  Cases, diagnoses, documents, workflow definitions/steps, target `workflow_runs`, target `audit_events`. Also includes `document_types`, pulled forward from Wave 3 (Task 21B): `case_documents.document_type_code` is a required (NOT NULL) reference to it, and a Wave must be internally dependency-consistent, so the zero-dependency reference master moved forward with its dependent table — schema only, no reference rows. See [migration_plan.md §17.D](migration_plan.md#17d-wave-2-physical-implementation--complete).
 
 - **Wave 3 — Requirements & Deterministic Rules**
-  Requirement sets/rules, document types, rule evaluations.
+  Requirement sets/rules, rule evaluations. (`document_types` was originally planned here; it now belongs to Wave 2 — see above.)
 
 - **Wave 4 — Integration, AI & Human-in-the-Loop Persistence**
   Integration execution, AI run/tasks, human review.

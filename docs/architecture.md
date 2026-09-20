@@ -101,24 +101,26 @@ ultimately decided.
 
 ## 6. Database Design
 
-**Current implementation:** a minimal prototype persistence foundation
-— the `workflow_runs` and `audit_events` tables, accessed through a
-repository pattern — remains in place and validated against a real
-local Microsoft SQL Server instance. Alongside it, **Wave 1 of the
-canonical database foundation is now physically implemented**: 14
-organization and core reference tables have been created on the real
-local SQL Server database and validated (see below). The prototype
-`workflow_runs`/`audit_events` tables remain the pre-canonical
-versions until Wave 2 — they are not yet replaced or linked to the new
-Wave 1 tables.
+**Current implementation:** **Wave 1 and Wave 2 of the canonical
+database foundation are now physically implemented** — 14 organization/
+reference tables (Wave 1) plus 8 case/workflow tables (Wave 2) have
+been created on the real local SQL Server database and validated (see
+below). The `workflow_runs` and `audit_events` tables, accessed
+through the same `AuditRepository` pattern, are now their **canonical**
+23/19-column shape — the Task 18A/18B prototype shape was replaced via
+a controlled rebuild at the Wave 2 boundary (ADR-006); the prototype's
+disposable synthetic rows were intentionally removed, not preserved.
+No persistence orchestration wires the LangGraph workflow or the API
+to any of these tables yet — the physical schema and repository model
+exist, but nothing in `src/workflow/` or `src/api/` writes to them.
 
 **Target Phase 1 design:** a canonical 36-table relational model
 (organizational masters, case/workflow persistence, deterministic
 rule evaluations, integration execution records, validated AI output,
 human review, and immutable audit history), implemented incrementally
-through Waves. The target schema is a reviewed design baseline; 14 of
-36 tables (Wave 1) are now physically built, the remaining 22 (Waves
-2–6) are not yet built.
+through Waves. The target schema is a reviewed design baseline; 22 of
+36 tables (Waves 1-2) are now physically built, the remaining 14
+(Waves 3-6) are not yet built.
 
 Full detail is maintained in the dedicated database documentation
 rather than duplicated here: [database/](database/), the
@@ -132,34 +134,43 @@ Wave 1 physical implementation status), and
 Status: architecture decision accepted, the migration framework is
 installed and initialized (`alembic.ini`, `migrations/`), wired to this
 project's existing SQLAlchemy metadata and secure database
-configuration, and now in active use. The first-revision/brownfield
+configuration, and in active use. The first-revision/brownfield
 prototype transition strategy is resolved (see
 [ADR-006](decisions/ADR-006-first-revision-and-brownfield-strategy.md))
-and has been executed: the first revision (`c841e86a8516`) implemented
-Wave 1 only, additively, leaving the existing
-`workflow_runs`/`audit_events` tables untouched.
+and has been fully executed: the first revision (`c841e86a8516`)
+implemented Wave 1 only, additively, leaving the existing
+`workflow_runs`/`audit_events` tables untouched; the second revision
+(`b9aba5b07ac8`) implemented Wave 2 and performed the approved
+controlled rebuild of those two tables into their canonical shape.
 
 **Wave 1 physical database foundation:** IMPLEMENTED.
-**Real SQL Server validation:** COMPLETED.
-**Installed Alembic revision:** `c841e86a8516`.
+**Wave 2 physical database foundation:** IMPLEMENTED.
+**Real SQL Server validation:** COMPLETED for both.
+**Installed Alembic revision:** `b9aba5b07ac8`.
 
 Validated on the real local `healthcare_ai_fde_lab` database: all 14
-Wave 1 tables exist; all primary keys and foreign keys (including the
-self-referencing `departments` FK and the universal
-`delete_reason_code` → `reasons` FK) match the documented design; all
-four Wave 1 business-key `UNIQUE` constraints exist; the prototype
-`workflow_runs`/`audit_events` tables and their row counts are
-unchanged; the 14 new tables contain no rows (no seed/reference data
-has been loaded).
+Wave 1 tables and all 8 Wave 2 tables exist (23 `dbo` tables total,
+including `alembic_version`); 8/8 Wave 2 primary keys, 40/40 Wave 2
+foreign keys, and 2/2 Wave 2 business-key `UNIQUE` constraints
+confirmed present; `document_types` was pulled forward from Wave 3
+into Wave 2 because `case_documents.document_type_code` requires it
+(schema only — see
+[migration_plan.md §17.D](database/migration_plan.md#17d-wave-2-physical-implementation--complete)
+for the full resolved-dependency explanation); the canonical
+`workflow_runs`/`audit_events` tables replaced the prototype shape,
+with the prototype's disposable synthetic rows intentionally removed;
+all 14 Wave 1 tables confirmed untouched; every Wave 2 table contains
+no rows (no seed/reference data has been loaded).
 
 **Wave 6 relational hardening remains deferred** — CHECK constraints,
-ISJSON validation, secondary indexes, and the `event_types`
-composite-FK-support `UNIQUE` constraint are intentionally not yet
-applied; their absence was explicitly confirmed during Wave 1
-validation, not overlooked.
+ISJSON validation, secondary indexes, composite FKs, the `event_types`
+composite-FK-support `UNIQUE` constraint, and the `workflow_runs`
+composite `UNIQUE(trace_id, case_id)` are intentionally not yet
+applied; their absence was explicitly confirmed during both Wave 1 and
+Wave 2 validation, not overlooked.
 
 **Wave 2 runtime identity/traceability decisions:** the two
-architecture decisions previously blocking Wave 2 design —
+architecture decisions that were blocking Wave 2 schema design —
 `trace_id` generation and the LangGraph-node-to-`workflow_definition_steps`
 mapping — are resolved (see
 [ADR-007](decisions/ADR-007-trace-id-and-workflow-step-mapping.md)).
@@ -167,9 +178,14 @@ In summary: `trace_id` is an application-generated UUID4, created once
 per workflow run at the future orchestration boundary immediately
 before the graph runs (this boundary does not exist in `src/` yet);
 and every current LangGraph node is explicitly mapped to a stable
-`step_code`, rather than persisting Python function names. Neither
-decision has been implemented in code yet — both are design
-constraints for the Wave 2 implementation task.
+`step_code`, rather than persisting Python function names. **Neither
+decision has runtime code behind it yet** — the Wave 2 schema itself
+now physically supports them (e.g. `workflow_runs.trace_id` accepts an
+application-generated UUID4; `audit_events.workflow_step_id` FKs to
+`workflow_definition_steps`), but no orchestration boundary, no
+LangGraph/API persistence wiring, and no node→step mapping module
+exist in `src/` — this remains explicitly future work, not something
+ADR-007 itself implemented.
 
 ## 7. Related Documents
 

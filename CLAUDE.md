@@ -40,14 +40,16 @@ These have already been reviewed and decided (see
   use: `alembic.ini` and `migrations/` (`env.py`, `script.py.mako`,
   `versions/`) exist and are wired to the project's existing
   SQLAlchemy metadata and secure database configuration. **Revision
-  `c841e86a8516` (Wave 1 database foundation) has been successfully
-  applied to the real local SQL Server database
-  (`healthcare_ai_fde_lab`) and validated (Task 20B).** Do not
-  substitute a different migration mechanism without explicit
-  approval, and do not create a migration revision (`alembic
-  revision`), run `alembic upgrade`/`downgrade`/`stamp`, or modify the
-  schema outside an explicitly approved, reviewed Alembic revision
-  task.
+  `c841e86a8516` (Wave 1 database foundation) and revision
+  `b9aba5b07ac8` (Wave 2 canonical case/workflow schema, including the
+  controlled rebuild of `workflow_runs`/`audit_events` into their
+  canonical shape) have both been successfully applied to the real
+  local SQL Server database (`healthcare_ai_fde_lab`) and validated
+  (Tasks 20B, 21B).** Do not substitute a different migration
+  mechanism without explicit approval, and do not create a migration
+  revision (`alembic revision`), run `alembic upgrade`/`downgrade`/
+  `stamp`, or modify the schema outside an explicitly approved,
+  reviewed Alembic revision task.
 
 ## Architecture Principles (apply to all implementation work)
 
@@ -107,8 +109,12 @@ Full detail: [docs/architecture.md](docs/architecture.md).
   approved, version-controlled migration; report migration and test
   results honestly; never claim a migration succeeded unless it was
   actually run and verified. Future schema changes must continue
-  through reviewed Alembic revisions, the same way revision
-  `c841e86a8516` was.
+  through reviewed Alembic revisions, the same way revisions
+  `c841e86a8516` and `b9aba5b07ac8` were. SQLite is not a valid dry-run
+  target for these revisions (they deliberately use SQL Server-specific
+  types such as `mssql.DATETIME2`, which SQLite cannot compile) — never
+  alter a migration to make it SQLite-compatible, and never treat
+  SQLite execution as a pass/fail gate for them.
 
 ## File Metadata Requirement
 

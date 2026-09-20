@@ -65,25 +65,33 @@ clinical approval or denial decisions — see
 - Local Microsoft SQL Server persistence validation (connectivity,
   schema creation, and repository read/write round-trips against a
   real local instance)
-- Alembic migration framework, operational and applied: Wave 1 of the
-  canonical database foundation (14 organization/reference tables) has
-  been migrated onto the real local SQL Server database and validated
-  (installed revision `c841e86a8516`); the pre-existing `workflow_runs`
-  and `audit_events` prototype tables were preserved unchanged
-- pytest test suite (241 tests passing as of this update)
+- Alembic migration framework, operational and applied: Wave 1
+  (14 organization/reference tables) and Wave 2 (8 case/workflow
+  tables, including a canonical replacement of the `workflow_runs`/
+  `audit_events` prototype) of the canonical database foundation have
+  both been migrated onto the real local SQL Server database and
+  validated (installed revision `b9aba5b07ac8`); the disposable
+  synthetic prototype rows were intentionally removed as part of the
+  Wave 2 controlled rebuild, and all 14 Wave 1 tables were preserved
+  unchanged
+- pytest test suite (279 tests passing as of this update)
 - Architecture design artifacts (ADRs, architecture/security/
   requirements docs)
 
 **DESIGNED / PLANNED (not yet implemented):**
-- Remaining canonical Phase 1 relational data model (Wave 2 and later,
-  22 of 36 tables remaining) — see [docs/database/](docs/database/)
-- Reference/master seed data loading for the Wave 1 tables
+- Remaining canonical Phase 1 relational data model (Wave 3 and later,
+  14 of 36 tables remaining) — see [docs/database/](docs/database/)
+- Reference/master seed data loading for the Wave 1/Wave 2 tables
 - Wave 6 relational hardening (CHECK constraints, JSON validation,
-  secondary indexes, `event_types` composite uniqueness)
-- Canonical replacement of the prototype `workflow_runs`/`audit_events`
-  tables (planned at the Wave 2 boundary)
-- Human-review persistence/lifecycle (today the workflow only carries
-  a `human_review_required` routing flag; there is no dedicated
+  secondary indexes, composite FKs, `event_types` composite uniqueness,
+  `workflow_runs` composite uniqueness)
+- Runtime wiring of the Wave 2 architecture decisions: LangGraph/API →
+  persistence, `trace_id` generation at the orchestration boundary, and
+  the LangGraph-node-to-workflow-step mapping (all decided in
+  [ADR-007](docs/decisions/ADR-007-trace-id-and-workflow-step-mapping.md),
+  none implemented as running code yet)
+- Human-in-the-Loop persistence/pause/resume (today the workflow only
+  carries a `human_review_required` routing flag; there is no dedicated
   review-task table or reviewer-decision persistence yet)
 - Streamlit application
 - Remaining end-to-end and productionization work — see
@@ -188,10 +196,11 @@ Phase 2 (production) would require.
 - No real external FHIR/payer system integration exists — the
   FHIR-style client uses synthetic data only, not a live production
   data source.
-- Only a minimal two-table persistence foundation (`workflow_runs`,
-  `audit_events`) is implemented; the canonical 36-table Phase 1
-  database design (see [docs/database/](docs/database/)) is a reviewed
-  baseline, not yet built.
+- Only 22 of the canonical 36-table Phase 1 database design (see
+  [docs/database/](docs/database/)) are physically built (Waves 1-2);
+  no persistence orchestration wires the LangGraph workflow or the API
+  to any of these tables yet — the physical schema exists, but nothing
+  in `src/` writes to it.
 - Human-review outcomes are not yet persisted; only a routing flag
   exists today.
 - No Streamlit UI exists yet.
@@ -210,15 +219,9 @@ summary.
 ## 12. Database Design Documentation
 
 **IMPLEMENTED:**
-- A minimal prototype persistence foundation: `workflow_runs` and
-  `audit_events` tables, accessed through a repository pattern
-  (`AuditRepository`). This has been validated against a real local
-  Microsoft SQL Server instance (connectivity, schema creation, and
-  repository read/write round-trips). These remain the pre-canonical
-  prototype tables until Wave 2.
 - The Alembic migration framework (see
   [ADR-005](docs/decisions/ADR-005-database-schema-migration-strategy.md))
-  is installed, initialized, and now in active use — `alembic.ini` and
+  is installed, initialized, and in active use — `alembic.ini` and
   `migrations/` (`env.py`, `script.py.mako`, `versions/`) exist in the
   repository.
 - Wave 1 of the canonical database foundation — 14 organization and
@@ -227,26 +230,46 @@ summary.
   `workflow_actions`, `event_categories`, `event_types`,
   `actor_types`, `source_components`, `result_codes`,
   `failure_categories`) — has been migrated onto the real local SQL
-  Server database `healthcare_ai_fde_lab` and validated: installed
-  Alembic revision `c841e86a8516`, all primary keys, foreign keys, and
-  business-key uniqueness constraints confirmed present, and the
-  existing `workflow_runs`/`audit_events` prototype tables confirmed
-  preserved (unchanged row counts and columns). The 14 new tables
-  contain no seed/reference data yet.
+  Server database `healthcare_ai_fde_lab` and validated: all primary
+  keys, foreign keys, and business-key uniqueness constraints
+  confirmed present.
+- Wave 2 of the canonical database foundation — 8 case/workflow tables
+  (`document_types`, `workflow_definitions`, `workflow_definition_steps`,
+  `prior_authorization_cases`, `case_diagnoses`, `case_documents`, and
+  the canonical `workflow_runs`/`audit_events`) — has also been
+  migrated onto the real local SQL Server database and validated:
+  installed Alembic revision `b9aba5b07ac8`, 8/8 primary keys, 40/40
+  foreign keys, and 2/2 business-key uniqueness constraints confirmed
+  present. `document_types` was originally scoped to Wave 3 but was
+  pulled forward into Wave 2 because `case_documents.document_type_code`
+  requires it (schema only — no reference rows were inserted).
+- The canonical `workflow_runs`/`audit_events` tables (23/19 columns,
+  accessed through `AuditRepository`) replaced the Task 18A/18B
+  prototype shape via a controlled rebuild — the disposable synthetic
+  prototype rows were intentionally removed, per
+  [ADR-006](docs/decisions/ADR-006-first-revision-and-brownfield-strategy.md).
+  All 14 Wave 1 tables were preserved, untouched, throughout.
+- The `trace_id` generation point and the LangGraph-node-to-workflow-step
+  mapping architecture decisions are resolved (see
+  [ADR-007](docs/decisions/ADR-007-trace-id-and-workflow-step-mapping.md))
+  — decided, but not yet wired into any running code.
 
 **DESIGNED / PLANNED:**
-- The remaining canonical Phase 1 relational data model (Wave 2 and
-  later — 22 of 36 tables) covering case/workflow persistence,
-  deterministic rule evaluations, integration execution records,
-  validated AI output, human review, and immutable audit history. This
-  design has been reviewed and approved as the Phase 1 baseline but is
-  implemented incrementally through Waves.
-- Reference/master seed data loading for the Wave 1 tables.
+- The remaining canonical Phase 1 relational data model (Wave 3 and
+  later — 14 of 36 tables) covering deterministic rule evaluations,
+  integration execution records, validated AI output, human review,
+  and client requirement intake. This design has been reviewed and
+  approved as the Phase 1 baseline but is implemented incrementally
+  through Waves.
+- Reference/master seed data loading for the Wave 1/Wave 2 tables.
+- Runtime wiring of the ADR-007 decisions: an orchestration boundary
+  that generates `trace_id` and calls the LangGraph graph, and the
+  actual LangGraph-node-to-`workflow_definition_steps` mapping module
+  — neither exists in `src/` yet.
 - Wave 6 relational hardening (CHECK constraints, ISJSON validation,
-  secondary indexes, and the `event_types` composite-FK-support
-  uniqueness constraint) — deliberately deferred, not yet applied.
-- Canonical replacement of the prototype `workflow_runs`/`audit_events`
-  tables, planned at the Wave 2 boundary.
+  secondary indexes, composite FKs, the `event_types` composite-FK-support
+  uniqueness constraint, and `workflow_runs` composite uniqueness) —
+  deliberately deferred, not yet applied.
 
 See:
 - [docs/database/data_model.md](docs/database/data_model.md)
@@ -254,7 +277,7 @@ See:
 - [docs/database/reference_data.md](docs/database/reference_data.md)
 - [docs/database/constraints_and_indexes.md](docs/database/constraints_and_indexes.md)
 - [docs/database/erd/](docs/database/erd/) — reviewed ERD artifacts (overview, full, and Mermaid text formats)
-- [docs/database/migration_plan.md](docs/database/migration_plan.md) — Wave 0 migration plan and Wave 1 physical implementation status
+- [docs/database/migration_plan.md](docs/database/migration_plan.md) — Wave 0 migration plan and Wave 1/Wave 2 physical implementation status
 - [docs/decisions/ADR-004-phase1-canonical-data-model.md](docs/decisions/ADR-004-phase1-canonical-data-model.md)
 - [docs/decisions/ADR-005-database-schema-migration-strategy.md](docs/decisions/ADR-005-database-schema-migration-strategy.md) — schema migration mechanism decision
 

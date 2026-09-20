@@ -59,11 +59,16 @@ def make_snapshot(**overrides) -> WorkflowRunSnapshot:
     data = {
         "trace_id": "SYN-TRACE-001",
         "case_id": "SYN-CASE-001",
-        "workflow_status": "COMPLETE",
+        "workflow_definition_id": "SYN-WORKFLOW-DEF-001",
+        "workflow_status_code": "COMPLETE",
         "human_review_required": False,
-        "failure_category": None,
+        "failure_category_code": None,
+        "initiated_by_component_code": "LANGGRAPH",
+        "started_at_utc": datetime(2026, 1, 15, 12, 0, 0, tzinfo=timezone.utc),
         "created_at_utc": datetime(2026, 1, 15, 12, 0, 0, tzinfo=timezone.utc),
+        "created_by": "SYSTEM",
         "updated_at_utc": datetime(2026, 1, 15, 12, 0, 0, tzinfo=timezone.utc),
+        "updated_by": "SYSTEM",
     }
     data.update(overrides)
     return WorkflowRunSnapshot(**data)
@@ -75,12 +80,17 @@ def make_event(**overrides) -> AuditEvent:
         "event_id": "SYN-EVENT-001",
         "trace_id": "SYN-TRACE-001",
         "case_id": "SYN-CASE-001",
-        "event_type": "workflow_completed",
-        "event_category": AuditEventCategory.WORKFLOW,
-        "workflow_status": "COMPLETE",
-        "processing_step": "workflow_completed",
-        "failure_category": None,
+        "event_type_code": "WORKFLOW_COMPLETED",
+        "event_category_code": AuditEventCategory.WORKFLOW,
+        "workflow_status_code": "COMPLETE",
+        "workflow_step_id": "SYN-STEP-001",
+        "source_component_code": "LANGGRAPH",
+        "actor_type_code": "SYSTEM",
+        "result_code": "SUCCESS",
+        "failure_category_code": None,
         "occurred_at_utc": datetime(2026, 1, 15, 12, 0, 0, tzinfo=timezone.utc),
+        "created_at_utc": datetime(2026, 1, 15, 12, 0, 0, tzinfo=timezone.utc),
+        "created_by": "SYSTEM",
     }
     data.update(overrides)
     return AuditEvent(**data)
@@ -134,7 +144,7 @@ def test_workflow_run_can_be_retrieved_by_trace_id():
     assert retrieved is not None
     assert retrieved.trace_id == snapshot.trace_id
     assert retrieved.case_id == snapshot.case_id
-    assert retrieved.workflow_status == snapshot.workflow_status
+    assert retrieved.workflow_status_code == snapshot.workflow_status_code
     assert retrieved.human_review_required == snapshot.human_review_required
 
 
@@ -146,11 +156,11 @@ def test_saving_same_trace_id_updates_instead_of_duplicating():
     engine = make_test_engine()
     repository = make_repository(engine)
 
-    repository.save_workflow_run(make_snapshot(workflow_status="PROCESSING"))
-    repository.save_workflow_run(make_snapshot(workflow_status="COMPLETE"))
+    repository.save_workflow_run(make_snapshot(workflow_status_code="PROCESSING"))
+    repository.save_workflow_run(make_snapshot(workflow_status_code="COMPLETE"))
 
     retrieved = repository.get_workflow_run("SYN-TRACE-001")
-    assert retrieved.workflow_status == "COMPLETE"
+    assert retrieved.workflow_status_code == "COMPLETE"
 
     with sessionmaker(bind=engine)() as session:
         row_count = session.query(WorkflowRunORM).count()
@@ -274,11 +284,11 @@ def test_repository_does_not_mutate_workflow_run_snapshot_input():
     # TEST-014X
     repository = make_repository()
     snapshot = make_snapshot()
-    original_status = snapshot.workflow_status
+    original_status = snapshot.workflow_status_code
 
     repository.save_workflow_run(snapshot)
 
-    assert snapshot.workflow_status == original_status
+    assert snapshot.workflow_status_code == original_status
 
 
 def test_repository_does_not_mutate_audit_event_input():
@@ -287,11 +297,11 @@ def test_repository_does_not_mutate_audit_event_input():
     # TEST-014Y
     repository = make_repository()
     event = make_event()
-    original_event_type = event.event_type
+    original_event_type = event.event_type_code
 
     repository.append_audit_event(event)
 
-    assert event.event_type == original_event_type
+    assert event.event_type_code == original_event_type
 
 
 # =====================================================================
