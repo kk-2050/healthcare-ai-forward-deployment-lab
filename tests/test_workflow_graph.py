@@ -218,6 +218,7 @@ def run_workflow(
         fhir_client = make_fhir_client()
 
     initial_state: CaseWorkflowState = {
+        "trace_id": "SYN-TRACE-WORKFLOW-TEST-001",
         "case": case,
         "fhir_integration_outcome": None,
         "evidence_consistency_result": None,
@@ -860,8 +861,11 @@ def test_final_workflow_state_does_not_contain_ai_provider():
     assert "ai_provider" not in final_state
     # Updated by Task 16B: fhir_integration_outcome was added to
     # CaseWorkflowState alongside the existing fields. Updated again by
-    # Task 17B: evidence_consistency_result was added.
+    # Task 17B: evidence_consistency_result was added. Updated again by
+    # Task 22: trace_id was added (ADR-007) -- application-generated
+    # once, before graph invocation, by src/workflow/orchestrator.py.
     assert set(CaseWorkflowState.__annotations__.keys()) == {
+        "trace_id",
         "case",
         "fhir_integration_outcome",
         "evidence_consistency_result",

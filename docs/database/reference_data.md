@@ -7,8 +7,7 @@ Author: K.Kashiwagi
 
 # Healthcare AI Forward Deployment Lab — Reference Data Catalog v2.2
 
-**Status:** PROPOSED Phase 1 seed baseline.
-Before database seeding, reconcile these codes with the actual current Python enums/constants and approved workflow semantics.
+**Status:** Approved Phase 1 seed baseline. **Implementation status (Task 22):** a loader (`src/db/reference_data.py`) implementing this catalog is built and has been run against the real local SQL Server database (`healthcare_ai_fde_lab`) — 78 rows currently loaded across 12 tables: `reasons` (7 — `EVIDENCE_MISMATCH`/`HUMAN_REVIEW` domains only; `CASE_CLOSE`/`DELETE` domains below remain proposed-but-not-loaded, since no currently implemented workflow path references them), `case_statuses` (5), `workflow_statuses` (4), `workflow_actions` (4), `event_categories` (6), `event_types` (15), `actor_types` (4), `source_components` (8), `result_codes` (8), `failure_categories` (8), `workflow_definitions` (1), `workflow_definition_steps` (8 — the complete set below, not only a subset). `document_types`, `requirement_types`, `human_review_statuses`, `human_review_outcomes`, `discovery_item_types`, and `ai_task_types` remain proposed only — not yet loaded, since no currently implemented workflow path requires them. Loader idempotency (insert-missing-only; a semantic conflict on an existing row fails and rolls back the whole load, never silently overwriting) was validated directly against the real database. See [migration_plan.md §17.E](migration_plan.md#17e-task-22--langgraph--sql-persistence-wiring-and-reference-data-loading--complete) for the full validation record. This document's catalog values themselves are unchanged by Task 22 — only their load status is recorded here.
 
 ## 1. Seed-data principles
 
@@ -21,6 +20,8 @@ Before database seeding, reconcile these codes with the actual current Python en
 - Evidence mismatch reasons are business `reasons`, not `failure_categories`.
 
 ## 2. Synthetic organization baseline
+
+**Not part of the Task 22 stable reference-data loader.** `src/db/reference_data.py` never creates a `clients`, `department`, `location`, or `prior_authorization_cases` row — the example `cli_demo_001` row below remains a proposed design example only. The one real SQL Server integration test that needs a client/case (`tests/test_workflow_orchestrator_integration.py`, opt-in only) creates its own separate, differently-identified synthetic fixture (`cli_integration_test_001`) and deletes it after the test — it is never treated as reference/config data.
 
 ### `clients`
 
@@ -105,9 +106,11 @@ The current Python `WorkflowStatus` enum predates the relational status model.
 |---|---|---|---:|
 | `PRIOR_AUTHORIZATION` | `1.0` | Prior Authorization Phase 1 | 1 |
 
+**Loaded (Task 22):** `workflow_definition_id = wfdef_prior_authorization_1_0` — a deterministic, human-readable prototype identifier derived from `workflow_code`/`version_no` (no literal ID is prescribed by the canonical design; see `src/db/reference_data.py`), not a random UUID, so repeated loads resolve to the same row.
+
 ## 7. `workflow_definition_steps`
 
-Proposed semantic steps; exact IDs are generated during seeding.
+Proposed semantic steps; exact IDs are generated during seeding. **Loaded (Task 22):** all 8 steps below are loaded, each with a deterministic `workflow_step_id` of the form `wfstep_prior_authorization_1_0_<step_code, lowercased>` (e.g. `wfstep_prior_authorization_1_0_fhir_retrieval`) — the same deterministic-ID convention as `workflow_definition_id` above, not a random UUID.
 
 | step_code | step_order | optional | purpose |
 |---|---:|---:|---|

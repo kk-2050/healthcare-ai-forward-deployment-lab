@@ -74,25 +74,52 @@ clinical approval or denial decisions — see
   synthetic prototype rows were intentionally removed as part of the
   Wave 2 controlled rebuild, and all 14 Wave 1 tables were preserved
   unchanged
-- pytest test suite (279 tests passing as of this update)
+- LangGraph ↔ SQL persistence orchestration boundary (pure Python,
+  `src/workflow/orchestrator.py`): generates one application-side
+  UUID4 `trace_id` per workflow run, invokes the existing LangGraph
+  graph, and persists the run to canonical `workflow_runs` (create at
+  start, update on completion, immutable run-identity fields enforced)
+  and canonical `audit_events` (meaningful transitions only, using the
+  explicit stable LangGraph-node → `step_code` mapping in
+  `src/workflow/step_mapping.py` — never a raw Python function name).
+  `HUMAN_REVIEW_REQUIRED` is persisted as a pause, not a completion;
+  persistence failures are surfaced, never hidden. Not yet wired to any
+  HTTP endpoint — see Current Limitations.
+- Stable Phase 1 reference/configuration data loader
+  (`src/db/reference_data.py`), separate from Alembic schema
+  migrations: idempotent insert-missing-only loading with conflict
+  detection (a semantic mismatch fails and rolls back the whole load
+  rather than silently overwriting). Loaded onto the real local SQL
+  Server database and validated, including a second-run idempotency
+  check (0 inserted, all 78 already present): 78 stable rows across 12
+  tables, including the complete approved 8-step `PRIOR_AUTHORIZATION`
+  workflow definition/configuration.
+- Real local SQL Server integration validation of the orchestration
+  boundary end to end: a synthetic case, mocked FHIR success, the
+  AI-not-needed path, reaching `COMPLETED`/`COMPLETE_WORKFLOW`, with
+  exactly one `workflow_runs` row and six `audit_events` rows
+  persisted, all sharing one `trace_id`, and the synthetic test
+  fixture cleaned up afterward. No Azure OpenAI call and no real
+  external FHIR call were made.
+- pytest test suite (312 tests passing, 1 opt-in real-SQL-Server test
+  intentionally skipped by default, as of this update)
 - Architecture design artifacts (ADRs, architecture/security/
   requirements docs)
 
 **DESIGNED / PLANNED (not yet implemented):**
 - Remaining canonical Phase 1 relational data model (Wave 3 and later,
   14 of 36 tables remaining) — see [docs/database/](docs/database/)
-- Reference/master seed data loading for the Wave 1/Wave 2 tables
 - Wave 6 relational hardening (CHECK constraints, JSON validation,
   secondary indexes, composite FKs, `event_types` composite uniqueness,
   `workflow_runs` composite uniqueness)
-- Runtime wiring of the Wave 2 architecture decisions: LangGraph/API →
-  persistence, `trace_id` generation at the orchestration boundary, and
-  the LangGraph-node-to-workflow-step mapping (all decided in
-  [ADR-007](docs/decisions/ADR-007-trace-id-and-workflow-step-mapping.md),
-  none implemented as running code yet)
-- Human-in-the-Loop persistence/pause/resume (today the workflow only
-  carries a `human_review_required` routing flag; there is no dedicated
-  review-task table or reviewer-decision persistence yet)
+- An API endpoint that invokes the orchestration boundary (`POST
+  /cases/validate` remains validation-only; no endpoint triggers full
+  LangGraph execution/persistence yet)
+- Human-in-the-Loop pause/resume orchestration, reviewer assignment,
+  reviewer UI, reviewer-decision persistence, and final human
+  approval/denial workflow (today the orchestrator persists
+  `HUMAN_REVIEW_REQUIRED` correctly and preserves the run's `trace_id`
+  for a future resume, but does not itself pause/resume anything)
 - Streamlit application
 - Remaining end-to-end and productionization work — see
   [docs/production_roadmap.md](docs/production_roadmap.md)
@@ -197,12 +224,14 @@ Phase 2 (production) would require.
   FHIR-style client uses synthetic data only, not a live production
   data source.
 - Only 22 of the canonical 36-table Phase 1 database design (see
-  [docs/database/](docs/database/)) are physically built (Waves 1-2);
-  no persistence orchestration wires the LangGraph workflow or the API
-  to any of these tables yet — the physical schema exists, but nothing
-  in `src/` writes to it.
-- Human-review outcomes are not yet persisted; only a routing flag
-  exists today.
+  [docs/database/](docs/database/)) are physically built (Waves 1-2).
+  The LangGraph workflow is now wired to persistence (see Current
+  Status), but only as a pure Python orchestration function — no HTTP
+  endpoint invokes it yet, so the running API surface
+  (`POST /cases/validate`) still does not itself persist anything.
+- Human-review *outcomes* (a reviewer's decision) are not yet
+  persisted, and there is no pause/resume orchestration yet — only the
+  `HUMAN_REVIEW_REQUIRED` routing state itself is persisted today.
 - No Streamlit UI exists yet.
 - Not evaluated for clinical, legal, or regulatory accuracy — it is a
   technical/architectural demonstration only.
@@ -250,9 +279,19 @@ summary.
   [ADR-006](docs/decisions/ADR-006-first-revision-and-brownfield-strategy.md).
   All 14 Wave 1 tables were preserved, untouched, throughout.
 - The `trace_id` generation point and the LangGraph-node-to-workflow-step
-  mapping architecture decisions are resolved (see
+  mapping architecture decisions (see
   [ADR-007](docs/decisions/ADR-007-trace-id-and-workflow-step-mapping.md))
-  — decided, but not yet wired into any running code.
+  are now implemented as running code:
+  `src/workflow/orchestrator.py` generates the `trace_id` and
+  `src/workflow/step_mapping.py` is the single authoritative node →
+  `step_code` mapping.
+- Reference/master seed data loading (`src/db/reference_data.py`) —
+  idempotent, conflict-detecting, separate from Alembic — is
+  implemented and has been run against the real local SQL Server
+  database: 78 stable rows across 12 tables, including the complete
+  8-step `PRIOR_AUTHORIZATION` workflow definition. Synthetic business
+  fixtures (a test client/case) are explicitly not part of this stable
+  catalog and are not loaded by it.
 
 **DESIGNED / PLANNED:**
 - The remaining canonical Phase 1 relational data model (Wave 3 and
@@ -261,11 +300,10 @@ summary.
   and client requirement intake. This design has been reviewed and
   approved as the Phase 1 baseline but is implemented incrementally
   through Waves.
-- Reference/master seed data loading for the Wave 1/Wave 2 tables.
-- Runtime wiring of the ADR-007 decisions: an orchestration boundary
-  that generates `trace_id` and calls the LangGraph graph, and the
-  actual LangGraph-node-to-`workflow_definition_steps` mapping module
-  — neither exists in `src/` yet.
+- An API endpoint that invokes the orchestration boundary end to end
+  (the orchestrator itself is implemented; no HTTP route calls it yet).
+- Human-in-the-Loop pause/resume orchestration and reviewer-decision
+  persistence (Task 23 scope).
 - Wave 6 relational hardening (CHECK constraints, ISJSON validation,
   secondary indexes, composite FKs, the `event_types` composite-FK-support
   uniqueness constraint, and `workflow_runs` composite uniqueness) —

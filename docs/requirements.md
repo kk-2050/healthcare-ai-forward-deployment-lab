@@ -256,9 +256,17 @@ Status values used below follow the README's existing convention:
 conceptual implementation target, test ID, and audit event, but no
 code has been written yet (see
 [README.md — Current Project Status](../README.md#4-current-project-status)).
-No row in this matrix is IMPLEMENTED. "Planned Implementation" entries
-name conceptual components, not actual files, unless such a file
-already exists in the repository.
+No row's Status column below has been updated to IMPLEMENTED — this
+matrix has not been re-walked row-by-row since Task 22. Note, however,
+that real code now exists behind parts of the BR-004/FR-8/FR-9 row
+(`src/workflow/orchestrator.py` persists workflow transitions and
+audit events to SQL Server) and part of the BR-003 row
+(`HUMAN_REVIEW_REQUIRED` is persisted correctly, though pause/resume
+is not yet built) — see
+[README.md — Current Project Status](../README.md#4-current-project-status)
+for the authoritative, currently accurate implementation status.
+"Planned Implementation" entries name conceptual components, not
+actual files, unless such a file already exists in the repository.
 
 | Business Req | Functional Req | Technical Req | Planned Implementation | Planned Test | Planned Audit Event | Status |
 |---|---|---|---|---|---|---|

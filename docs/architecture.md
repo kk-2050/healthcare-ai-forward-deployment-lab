@@ -110,9 +110,13 @@ through the same `AuditRepository` pattern, are now their **canonical**
 23/19-column shape — the Task 18A/18B prototype shape was replaced via
 a controlled rebuild at the Wave 2 boundary (ADR-006); the prototype's
 disposable synthetic rows were intentionally removed, not preserved.
-No persistence orchestration wires the LangGraph workflow or the API
-to any of these tables yet — the physical schema and repository model
-exist, but nothing in `src/workflow/` or `src/api/` writes to them.
+**The LangGraph workflow is now wired to this persistence layer**
+(Task 22): `src/workflow/orchestrator.py` is a pure Python
+orchestration function — generates one `trace_id` per run, invokes the
+existing LangGraph graph, and persists `workflow_runs`/`audit_events`
+via `AuditRepository` — validated end to end against real SQL Server
+(see below). It is not yet wired to any HTTP endpoint; `src/api/app.py`
+still exposes only the validation-only `POST /cases/validate`.
 
 **Target Phase 1 design:** a canonical 36-table relational model
 (organizational masters, case/workflow persistence, deterministic
@@ -169,23 +173,23 @@ composite `UNIQUE(trace_id, case_id)` are intentionally not yet
 applied; their absence was explicitly confirmed during both Wave 1 and
 Wave 2 validation, not overlooked.
 
-**Wave 2 runtime identity/traceability decisions:** the two
-architecture decisions that were blocking Wave 2 schema design —
-`trace_id` generation and the LangGraph-node-to-`workflow_definition_steps`
-mapping — are resolved (see
-[ADR-007](decisions/ADR-007-trace-id-and-workflow-step-mapping.md)).
-In summary: `trace_id` is an application-generated UUID4, created once
-per workflow run at the future orchestration boundary immediately
-before the graph runs (this boundary does not exist in `src/` yet);
+**Wave 2 runtime identity/traceability decisions — now implemented
+(Task 22):** the two architecture decisions that were blocking Wave 2
+schema design — `trace_id` generation and the
+LangGraph-node-to-`workflow_definition_steps` mapping — are resolved
+(see [ADR-007](decisions/ADR-007-trace-id-and-workflow-step-mapping.md))
+and now have running code behind them: `trace_id` is an
+application-generated UUID4, created once per workflow run in
+`src/workflow/orchestrator.py`, immediately before `graph.invoke()`;
 and every current LangGraph node is explicitly mapped to a stable
-`step_code`, rather than persisting Python function names. **Neither
-decision has runtime code behind it yet** — the Wave 2 schema itself
-now physically supports them (e.g. `workflow_runs.trace_id` accepts an
-application-generated UUID4; `audit_events.workflow_step_id` FKs to
-`workflow_definition_steps`), but no orchestration boundary, no
-LangGraph/API persistence wiring, and no node→step mapping module
-exist in `src/` — this remains explicitly future work, not something
-ADR-007 itself implemented.
+`step_code` in `src/workflow/step_mapping.py`, never a raw Python
+function name. Both were validated end to end against real SQL Server:
+one `trace_id` persisted consistently across one `workflow_runs` row
+and six `audit_events` rows, with `workflow_step_id` resolved from the
+real `workflow_definition_steps` rows loaded by
+`src/db/reference_data.py`. Still not implemented: any HTTP endpoint
+that calls this orchestrator, and Human-in-the-Loop pause/resume
+(Task 23).
 
 ## 7. Related Documents
 

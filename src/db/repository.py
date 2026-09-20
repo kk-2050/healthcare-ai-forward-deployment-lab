@@ -109,23 +109,24 @@ class AuditRepository:
                         )
                     )
                 else:
-                    # created_at_utc/created_by are immutable after creation
-                    # (see docs/database/data_model.md Section 4) and are
-                    # therefore never overwritten here.
-                    existing.case_id = snapshot.case_id
-                    existing.workflow_definition_id = snapshot.workflow_definition_id
+                    # Run-identity fields are immutable after creation (see
+                    # docs/database/data_model.md Section 4 for created_at_utc/
+                    # created_by, and Task 22's mutability policy for the
+                    # rest): trace_id (the lookup key itself), case_id,
+                    # workflow_definition_id, initiated_by_component_code,
+                    # started_at_utc, schema_version, created_at_utc, and
+                    # created_by are never reassigned on an update -- a run
+                    # never changes which case/workflow-definition/component
+                    # it belongs to, when it started, or who/when it was
+                    # created. Only genuinely mutable, in-progress fields are
+                    # updated below.
                     existing.workflow_status_code = snapshot.workflow_status_code
                     existing.next_action_code = snapshot.next_action_code
                     existing.human_review_required = snapshot.human_review_required
                     existing.failure_category_code = snapshot.failure_category_code
                     existing.processing_department_id = snapshot.processing_department_id
                     existing.processing_location_id = snapshot.processing_location_id
-                    existing.initiated_by_component_code = (
-                        snapshot.initiated_by_component_code
-                    )
-                    existing.started_at_utc = snapshot.started_at_utc
                     existing.completed_at_utc = snapshot.completed_at_utc
-                    existing.schema_version = snapshot.schema_version
                     existing.metadata_json = snapshot.metadata_json
                     existing.updated_at_utc = snapshot.updated_at_utc
                     existing.updated_by = snapshot.updated_by

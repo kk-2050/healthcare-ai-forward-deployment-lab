@@ -100,6 +100,22 @@ Full detail: [docs/architecture.md](docs/architecture.md).
   mentioning it in code or chat.
 - Current implementation status is tracked in [README.md](README.md) —
   keep the "Current Status" section accurate as work progresses.
+- The LangGraph ↔ SQL persistence orchestration boundary
+  (`src/workflow/orchestrator.py`) and the stable node → `step_code`
+  mapping (`src/workflow/step_mapping.py`) are implemented (Task 22) —
+  a pure Python function, not wired to any HTTP endpoint yet. The
+  stable reference/configuration loader (`src/db/reference_data.py`)
+  is implemented, idempotent, and has been run against the real local
+  SQL Server database (78 rows across 12 tables). It is separate from
+  Alembic and from synthetic business/test fixtures — never add a
+  client/case/business row to it, and never silently overwrite a
+  conflicting existing row; a real semantic conflict must fail loudly.
+  The opt-in real SQL Server integration test
+  (`tests/test_workflow_orchestrator_integration.py`) is skipped by
+  ordinary `pytest`; only run it with
+  `RUN_SQL_SERVER_INTEGRATION_TESTS=1` explicitly set, and only after
+  the same review-then-approve discipline used for every other
+  live-database action in this project.
 - Alembic is initialized and in active use (see Fixed Technology
   Decisions and
   [ADR-005](docs/decisions/ADR-005-database-schema-migration-strategy.md)):
