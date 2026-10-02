@@ -23,18 +23,30 @@
 # effective date is documented).
 #
 # TABLE ACCESS STRATEGY (read before adding a table here):
-# Ten of the twelve tables loaded here (reasons, case_statuses,
+# Twelve of the fourteen tables loaded here (reasons, case_statuses,
 # workflow_statuses, workflow_actions, event_categories, event_types,
-# actor_types, source_components, result_codes, failure_categories)
+# actor_types, source_components, result_codes, failure_categories,
+# human_review_statuses, human_review_outcomes)
 # have NO SQLAlchemy ORM class -- only raw Alembic DDL (see
 # migrations/versions/c841e86a8516_create_wave_1_database_foundation.py
+# and migrations/versions/f2fb22e3a41e_create_human_review_persistence_tables.py,
 # and src/db/models.py's Foreign Key Policy docstring, which explains
-# why: Wave 1 tables were deliberately never given ORM classes). This
+# why: these reference-master tables were deliberately never given ORM
+# classes). This
 # loader reads/writes them via parameterized sa.text() statements
 # executed through the SAME session/transaction the caller supplies --
 # not a second ORM registry, not a second connection. The remaining two
 # tables (workflow_definitions, workflow_definition_steps) already have
 # real ORM classes (Task 21B) and are loaded through them directly.
+#
+# TASK 23 PREREQUISITE (do not run before this is satisfied):
+# human_review_statuses/human_review_outcomes below require Alembic
+# revision f2fb22e3a41e to be applied first -- this loader does not
+# check for that (no table in this loader ever has; schema and seed
+# data are separate, ordered concerns per ADR-005). Running this
+# loader against a database still at b9aba5b07ac8 will raise a raw SQL
+# "invalid object name" error for these two tables, not a graceful
+# skip -- that is expected, not a bug to work around here.
 #
 # IDENTIFIER STRATEGY:
 # workflow_definition_id/workflow_step_id are application-generated
@@ -181,6 +193,21 @@ _TABLE_COLUMNS: dict[str, list[str]] = {
         "requires_human_review_default",
         "is_active",
     ],
+    "human_review_statuses": [
+        "review_status_code",
+        "review_status_name",
+        "description",
+        "is_terminal",
+        "is_active",
+    ],
+    "human_review_outcomes": [
+        "review_outcome_code",
+        "review_outcome_name",
+        "description",
+        "returns_to_workflow",
+        "closes_case",
+        "is_active",
+    ],
 }
 
 _TABLE_PK: dict[str, str] = {
@@ -194,6 +221,8 @@ _TABLE_PK: dict[str, str] = {
     "source_components": "source_component_code",
     "result_codes": "result_code",
     "failure_categories": "failure_category_code",
+    "human_review_statuses": "review_status_code",
+    "human_review_outcomes": "review_outcome_code",
 }
 
 # Load order matters: event_categories must exist before event_types
@@ -201,12 +230,13 @@ _TABLE_PK: dict[str, str] = {
 # order is what _load_raw_tables() below iterates in.
 _TABLE_ROWS: dict[str, list[dict]] = {
     # ---- reasons (docs/database/reference_data.md Section 16) ----
-    # Only the EVIDENCE_MISMATCH and HUMAN_REVIEW domains are loaded --
-    # these are the only reason_code values the currently implemented
-    # workflow (src/workflow/orchestrator.py) actually references.
-    # CASE_CLOSE and DELETE domains are documented but not yet
-    # referenced by any implemented code path, so they are not loaded
-    # here (avoids seeding rows nothing currently uses).
+    # The EVIDENCE_MISMATCH, HUMAN_REVIEW, and (Step 23C-2C1) CASE_CLOSE
+    # domains are loaded -- CASE_CLOSE is now referenced by implemented
+    # code (src/workflow/human_review_service.py's CLOSE_CASE
+    # close_reason_code validation), so it is no longer excluded on the
+    # "nothing currently uses it" basis that previously applied. The
+    # DELETE domain remains documented but not yet referenced by any
+    # implemented code path, so it is still not loaded here.
     "reasons": [
         {
             "reason_code": "EVIDENCE_MISMATCH_SERVICE_CODE",
@@ -262,6 +292,77 @@ _TABLE_ROWS: dict[str, list[dict]] = {
             "reason_name": "Human Review - Ambiguity",
             "description": "Material ambiguity requires a human",
             "requires_text": False,
+            "is_active": True,
+        },
+        {
+            "reason_code": "HUMAN_REVIEW_UNRESOLVED_MISSING_INFORMATION",
+            "reason_type_code": "HUMAN_REVIEW",
+            "reason_name": "Human Review - Unresolved Missing Information",
+            "description": (
+                "Required information remained unresolved after the "
+                "approved, already-authorized information process, or "
+                "could not be obtained within the existing authorized "
+                "boundary"
+            ),
+            "requires_text": False,
+            "is_active": True,
+        },
+        # ---- CASE_CLOSE domain (reference_data.md Section 16) ----
+        # Step 23C-2C1: now referenced by implemented code
+        # (src/workflow/human_review_service.py's CLOSE_CASE
+        # close_reason_code validation). reason_name follows the exact
+        # "Domain - Title Case" convention already used for the
+        # HUMAN_REVIEW_* rows above (not itself a documented column in
+        # reference_data.md's 3-column reasons table, same as for those
+        # rows). requires_text is True only for CASE_CLOSE_OTHER,
+        # directly derived from its own documented meaning ("Other;
+        # explanatory text required") -- not an invented flag.
+        {
+            "reason_code": "CASE_CLOSE_COMPLETED",
+            "reason_type_code": "CASE_CLOSE",
+            "reason_name": "Case Close - Completed",
+            "description": "Normal case processing completed",
+            "requires_text": False,
+            "is_active": True,
+        },
+        {
+            "reason_code": "CASE_CLOSE_REQUEST_WITHDRAWN",
+            "reason_type_code": "CASE_CLOSE",
+            "reason_name": "Case Close - Request Withdrawn",
+            "description": "Request withdrawn",
+            "requires_text": False,
+            "is_active": True,
+        },
+        {
+            "reason_code": "CASE_CLOSE_DUPLICATE",
+            "reason_type_code": "CASE_CLOSE",
+            "reason_name": "Case Close - Duplicate",
+            "description": "Duplicate case closed",
+            "requires_text": False,
+            "is_active": True,
+        },
+        {
+            "reason_code": "CASE_CLOSE_SUPERSEDED",
+            "reason_type_code": "CASE_CLOSE",
+            "reason_name": "Case Close - Superseded",
+            "description": "Superseded by another case",
+            "requires_text": False,
+            "is_active": True,
+        },
+        {
+            "reason_code": "CASE_CLOSE_ADMINISTRATIVE",
+            "reason_type_code": "CASE_CLOSE",
+            "reason_name": "Case Close - Administrative",
+            "description": "Administrative close",
+            "requires_text": False,
+            "is_active": True,
+        },
+        {
+            "reason_code": "CASE_CLOSE_OTHER",
+            "reason_type_code": "CASE_CLOSE",
+            "reason_name": "Case Close - Other",
+            "description": "Other; explanatory text required",
+            "requires_text": True,
             "is_active": True,
         },
     ],
@@ -326,6 +427,19 @@ _TABLE_ROWS: dict[str, list[dict]] = {
             "is_terminal": False,
             "requires_human_review": True,
             "sort_order": 20,
+            "is_active": True,
+        },
+        {
+            "workflow_status_code": "PENDING_RESUME",
+            "workflow_status_name": "Pending Resume",
+            "description": (
+                "A human review outcome requiring return to automated "
+                "workflow processing has been recorded; actual "
+                "post-review automated continuation has not yet started"
+            ),
+            "is_terminal": False,
+            "requires_human_review": False,
+            "sort_order": 25,
             "is_active": True,
         },
         {
@@ -435,6 +549,22 @@ _TABLE_ROWS: dict[str, list[dict]] = {
             "event_category_code": "WORKFLOW",
             "event_type_name": "Workflow Started",
             "description": "Workflow run started",
+            "is_active": True,
+        },
+        # Step 24B-4A: same-run/same-trace application-level resume
+        # continuation actually beginning -- never emitted merely
+        # because CONTINUE_WORKFLOW was recorded, PENDING_RESUME exists,
+        # or the resume claim succeeded; only once graph invocation
+        # genuinely begins. Reuses the existing WORKFLOW category and
+        # LANGGRAPH source component -- no new category/component/step.
+        {
+            "event_type_code": "WORKFLOW_RESUMED",
+            "event_category_code": "WORKFLOW",
+            "event_type_name": "Workflow Resumed",
+            "description": (
+                "Automated post-review same-run/same-trace continuation "
+                "actually began"
+            ),
             "is_active": True,
         },
         {
@@ -633,6 +763,14 @@ _TABLE_ROWS: dict[str, list[dict]] = {
             "version_label": None,
             "is_active": True,
         },
+        {
+            "source_component_code": "HUMAN_REVIEW_SERVICE",
+            "component_name": "Human Review Service",
+            "component_type_code": None,
+            "description": None,
+            "version_label": None,
+            "is_active": True,
+        },
     ],
     # ---- result_codes (reference_data.md Section 14) ----
     "result_codes": [
@@ -760,6 +898,76 @@ _TABLE_ROWS: dict[str, list[dict]] = {
             "is_active": True,
         },
     ],
+    # ---- human_review_statuses (reference_data.md Section 17) ----
+    # Requires Alembic revision f2fb22e3a41e -- see TASK 23 PREREQUISITE
+    # note at the top of this file.
+    "human_review_statuses": [
+        {
+            "review_status_code": "REQUESTED",
+            "review_status_name": "Requested",
+            "description": None,
+            "is_terminal": False,
+            "is_active": True,
+        },
+        {
+            "review_status_code": "IN_PROGRESS",
+            "review_status_name": "In Progress",
+            "description": None,
+            "is_terminal": False,
+            "is_active": True,
+        },
+        {
+            "review_status_code": "COMPLETED",
+            "review_status_name": "Completed",
+            "description": None,
+            "is_terminal": True,
+            "is_active": True,
+        },
+        {
+            "review_status_code": "CANCELLED",
+            "review_status_name": "Cancelled",
+            "description": None,
+            "is_terminal": True,
+            "is_active": True,
+        },
+    ],
+    # ---- human_review_outcomes (reference_data.md Section 18) ----
+    # "No autonomous clinical approval/denial outcome is defined" --
+    # reference_data.md Section 18's own note. Requires f2fb22e3a41e.
+    "human_review_outcomes": [
+        {
+            "review_outcome_code": "CONTINUE_WORKFLOW",
+            "review_outcome_name": "Continue Workflow",
+            "description": None,
+            "returns_to_workflow": True,
+            "closes_case": False,
+            "is_active": True,
+        },
+        {
+            "review_outcome_code": "REQUEST_MORE_INFORMATION",
+            "review_outcome_name": "Request More Information",
+            "description": None,
+            "returns_to_workflow": False,
+            "closes_case": False,
+            "is_active": True,
+        },
+        {
+            "review_outcome_code": "ESCALATE",
+            "review_outcome_name": "Escalate",
+            "description": None,
+            "returns_to_workflow": False,
+            "closes_case": False,
+            "is_active": True,
+        },
+        {
+            "review_outcome_code": "CLOSE_CASE",
+            "review_outcome_name": "Close Case",
+            "description": None,
+            "returns_to_workflow": False,
+            "closes_case": True,
+            "is_active": True,
+        },
+    ],
 }
 
 # ---- workflow_definition_steps (reference_data.md Section 7) ----
@@ -782,6 +990,16 @@ _WORKFLOW_DEFINITION_STEPS = [
     {"step_code": "COMPLETENESS_CHECK", "step_order": 40, "is_optional": False,
      "step_name": "Deterministic required-information check",
      "source_component_code": "RULE_ENGINE"},
+    # Step 23C-5C (ADR-008): the Stage 1 missing-information disposition,
+    # reached only when COMPLETENESS_CHECK finds required information
+    # missing -- distinct from that check itself and from HUMAN_REVIEW
+    # (this is explicitly not a Human Review escalation). step_order=45
+    # inserted between the existing 40/50 values without renumbering any
+    # already-loaded row, following the same "multiples of ten leave
+    # room to insert" convention already used throughout this table.
+    {"step_code": "REQUEST_MISSING_INFORMATION", "step_order": 45, "is_optional": True,
+     "step_name": "Stage 1 deterministic missing-information disposition",
+     "source_component_code": "LANGGRAPH"},
     {"step_code": "AI_ROUTING", "step_order": 50, "is_optional": False,
      "step_name": "Decide whether AI is needed", "source_component_code": "RULE_ENGINE"},
     {"step_code": "AI_ANALYSIS", "step_order": 60, "is_optional": True,
@@ -918,10 +1136,11 @@ def _load_workflow_definition_steps(
     now: datetime,
     report: ReferenceDataLoadReport,
 ) -> dict[str, str]:
-    """Loads the complete 8-step Phase 1 workflow definition and
-    returns the resulting step_code -> workflow_step_id mapping, ready
-    to pass to run_prior_authorization_workflow()'s
-    step_code_to_workflow_step_id parameter."""
+    """Loads the complete 9-step Phase 1 workflow definition (Step
+    23C-5C added REQUEST_MISSING_INFORMATION) and returns the resulting
+    step_code -> workflow_step_id mapping, ready to pass to
+    run_prior_authorization_workflow()'s step_code_to_workflow_step_id
+    parameter."""
     step_code_to_id: dict[str, str] = {}
 
     for step in _WORKFLOW_DEFINITION_STEPS:
@@ -973,11 +1192,15 @@ def _load_workflow_definition_steps(
 # Purpose:
 # Loads the complete stable Phase 1 reference/configuration catalog
 # into the given session's transaction: reasons (EVIDENCE_MISMATCH/
-# HUMAN_REVIEW domains only), case_statuses, workflow_statuses,
-# workflow_actions, event_categories, event_types, actor_types,
-# source_components, result_codes, failure_categories,
-# workflow_definitions, and the complete 8-step workflow_definition_steps
-# definition.
+# HUMAN_REVIEW/CASE_CLOSE domains -- Step 23C-2C1 added CASE_CLOSE; the
+# DELETE domain remains excluded, not yet referenced by any implemented
+# code path), case_statuses, workflow_statuses, workflow_actions,
+# event_categories, event_types, actor_types, source_components,
+# result_codes, failure_categories, human_review_statuses,
+# human_review_outcomes (Task 23 -- requires Alembic revision
+# f2fb22e3a41e to already be applied), workflow_definitions, and the
+# complete 9-step workflow_definition_steps definition (Step 23C-5C
+# added REQUEST_MISSING_INFORMATION).
 #
 # Why a Session parameter, not a connection string:
 # Keeping connection/engine creation entirely out of this function

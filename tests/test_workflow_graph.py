@@ -340,32 +340,83 @@ def test_complete_case_without_ai_task_never_calls_provider():
 # =====================================================================
 # INCOMPLETE CASE / HUMAN REVIEW TESTS
 # =====================================================================
-def test_missing_documentation_routes_to_human_review():
-    """Verify a case missing required documentation is routed to human
-    review rather than completing anyway."""
+def test_missing_documentation_routes_to_stage1_missing_information():
+    """Verify a case missing required documentation routes to the Stage
+    1 deterministic missing-information disposition (ADR-008) -- NOT to
+    human review. Renamed/updated by Step 23C-5C: this exact case
+    previously (incorrectly, per Step 23C-3's finding) routed to
+    HUMAN_REVIEW_REQUIRED.
+
+    The submitted "SYN-DOC-A" must also be present in the retrieved FHIR
+    evidence (fhir_bundle_json_with_documentation), or the evidence
+    consistency check would route this case to human review before
+    completeness ever runs -- same caveat as
+    test_incomplete_case_preserves_exact_missing_documentation below."""
     # TEST-004B
     case = make_case(supporting_documentation=["SYN-DOC-A"])
     requirements = make_requirements(
         required_documentation=["SYN-DOC-A", "SYN-DOC-B"]
     )
+    fhir_client = make_fhir_client(
+        json_body=fhir_bundle_json_with_documentation("SYN-DOC-A")
+    )
 
-    final_state = run_workflow(case, requirements)
+    final_state = run_workflow(case, requirements, fhir_client=fhir_client)
 
-    assert final_state["workflow_status"] == WorkflowStatus.HUMAN_REVIEW_REQUIRED
-    assert final_state["human_review_required"] is True
+    assert (
+        final_state["workflow_status"]
+        == WorkflowStatus.MISSING_INFORMATION_REQUESTED
+    )
+    assert final_state["human_review_required"] is False
 
 
-def test_missing_clinical_notes_routes_to_human_review():
-    """Verify a case missing required clinical notes is routed to human
-    review."""
+def test_missing_clinical_notes_routes_to_stage1_missing_information():
+    """Verify a case missing required clinical notes routes to the
+    Stage 1 deterministic missing-information disposition -- NOT to
+    human review (Step 23C-5C)."""
     # TEST-004C
     case = make_case(clinical_notes=None)
     requirements = make_requirements(clinical_notes_required=True)
 
     final_state = run_workflow(case, requirements)
 
-    assert final_state["workflow_status"] == WorkflowStatus.HUMAN_REVIEW_REQUIRED
-    assert final_state["human_review_required"] is True
+    assert (
+        final_state["workflow_status"]
+        == WorkflowStatus.MISSING_INFORMATION_REQUESTED
+    )
+    assert final_state["human_review_required"] is False
+
+
+def test_stage1_missing_information_excludes_human_review_step():
+    """Verify a Stage 1 disposition's trace never mentions human review
+    -- the Stage 1 path and the human-review path stay distinct in the
+    processing-step trace, the same way the complete path already does
+    (Step 23C-5C)."""
+    case = make_case(supporting_documentation=[])
+    requirements = make_requirements(required_documentation=["SYN-DOC-A"])
+
+    final_state = run_workflow(case, requirements)
+
+    assert "human_review_required" not in final_state["processing_steps"]
+    assert "missing_information_requested" in final_state["processing_steps"]
+
+
+def test_stage1_missing_information_exact_step_order():
+    """Verify the exact processing-step order for the Stage 1 path:
+    healthcare evidence retrieval, evidence consistency, completeness
+    check (finds it incomplete), then the Stage 1 disposition -- AI
+    routing/execution never reached (Step 23C-5C)."""
+    case = make_case(supporting_documentation=[])
+    requirements = make_requirements(required_documentation=["SYN-DOC-A"])
+
+    final_state = run_workflow(case, requirements)
+
+    assert final_state["processing_steps"] == [
+        "healthcare_evidence_retrieved",
+        "evidence_consistency_evaluated",
+        "completeness_evaluated",
+        "missing_information_requested",
+    ]
 
 
 def test_incomplete_case_preserves_exact_missing_documentation():
@@ -446,11 +497,12 @@ def test_workflow_does_not_mutate_original_case():
     assert case.clinical_notes == original_notes
 
 
-def test_incomplete_case_with_ai_task_still_routes_to_human_review():
-    """Verify an incomplete case is routed to human review even when an
-    AI task was requested — a missing document or note always takes
-    priority over AI analysis, and AI routing/execution never runs for
-    an incomplete case."""
+def test_incomplete_case_with_ai_task_still_routes_to_stage1_missing_information():
+    """Verify an incomplete case routes to the Stage 1 disposition even
+    when an AI task was requested — a missing document or note always
+    takes priority over AI analysis, and AI routing/execution never runs
+    for an incomplete case. Updated by Step 23C-5C: no longer human
+    review."""
     # TEST-005J
     case = make_case(supporting_documentation=[])
     requirements = make_requirements(required_documentation=["SYN-DOC-A"])
@@ -458,7 +510,10 @@ def test_incomplete_case_with_ai_task_still_routes_to_human_review():
 
     final_state = run_workflow(case, requirements, ai_requirements)
 
-    assert final_state["workflow_status"] == WorkflowStatus.HUMAN_REVIEW_REQUIRED
+    assert (
+        final_state["workflow_status"]
+        == WorkflowStatus.MISSING_INFORMATION_REQUESTED
+    )
     assert "ai_requirement_evaluated" not in final_state["processing_steps"]
     assert "ai_analysis_required" not in final_state["processing_steps"]
 

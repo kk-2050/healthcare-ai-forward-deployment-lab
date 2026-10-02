@@ -159,6 +159,44 @@ def human_review_required_node(state: CaseWorkflowState) -> dict:
     }
 
 
+# =====================================================================
+# STAGE 1 MISSING-INFORMATION DISPOSITION
+# Purpose:
+# Marks a case as needing deterministically-identified missing
+# information (Stage 1 of the two-stage missing-information model --
+# ADR-008, docs/architecture.md §7.1), reached only when the
+# completeness check found required fields/documentation missing.
+#
+# Why:
+# This is deliberately NOT the human-review path: the missing
+# information here was detected by a deterministic rule, not escalated
+# after an authorized resolution attempt failed (that is Stage 2, not
+# yet implemented -- see ADR-008/security.md §8.7). Keeping it a
+# separate node/status from human_review_required_node is what makes
+# the Stage 1/Stage 2 distinction real in code, not just in
+# documentation (Step 23C-3's finding).
+#
+# Important Notes:
+# - This node does NOT call any external request/retrieval transport
+#   (still PLANNED, not built).
+# - This node does NOT call HumanReviewRepository/request_human_review()
+#   and does NOT create a human_reviews row.
+# - This node does NOT set any Stage 2 escalation signal -- no such
+#   signal exists in CaseWorkflowState (Option 2, Step 23C-5B: the
+#   signal is added only alongside its real producer).
+# - human_review_required stays False -- a Stage 1 disposition is not a
+#   human-review escalation.
+# =====================================================================
+def request_missing_information_node(state: CaseWorkflowState) -> dict:
+    """Marks the case as needing deterministically-identified missing
+    information and sets the matching Stage 1 status."""
+    return {
+        "human_review_required": False,
+        "workflow_status": WorkflowStatus.MISSING_INFORMATION_REQUESTED,
+        "processing_steps": ["missing_information_requested"],
+    }
+
+
 def complete_node(state: CaseWorkflowState) -> dict:
     """
     Marks deterministic-only processing as finished.

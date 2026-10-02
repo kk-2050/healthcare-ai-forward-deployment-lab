@@ -41,6 +41,19 @@ from src.models.rules import CompletenessRequirements, CompletenessResult
 # - AI_ANALYSIS_REQUIRED is a transient status set while the case is on
 #   its way into AI execution; it is not a final resting state in the
 #   current single-pass graph.
+# - MISSING_INFORMATION_REQUESTED (Step 23C-5C) is the Stage 1
+#   deterministic missing-information disposition (ADR-008,
+#   docs/architecture.md §7.1) -- reached when the completeness check
+#   finds required fields/documentation missing. It is deliberately NOT
+#   HUMAN_REVIEW_REQUIRED: no human_reviews row is created, and no human
+#   review is implied. At persistence it maps to the canonical
+#   workflow_status_code=COMPLETED (see src/workflow/orchestrator.py's
+#   _WORKFLOW_STATUS_TO_CODE) -- the same "this workflow run reached its
+#   current terminal disposition" meaning already used for
+#   COMPLETE/AI_ANALYSIS_COMPLETE, distinguished from them only by
+#   next_action_code=REQUEST_MISSING_INFORMATION, not by a new database
+#   status. The external request/response transport that would actually
+#   notify a requester remains PLANNED, not implemented by this status.
 # =====================================================================
 
 
@@ -50,6 +63,7 @@ class WorkflowStatus(str, Enum):
     HUMAN_REVIEW_REQUIRED = "HUMAN_REVIEW_REQUIRED"
     AI_ANALYSIS_REQUIRED = "AI_ANALYSIS_REQUIRED"
     AI_ANALYSIS_COMPLETE = "AI_ANALYSIS_COMPLETE"
+    MISSING_INFORMATION_REQUESTED = "MISSING_INFORMATION_REQUESTED"
 
 
 # =====================================================================

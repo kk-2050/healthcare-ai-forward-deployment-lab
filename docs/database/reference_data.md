@@ -9,6 +9,12 @@ Author: K.Kashiwagi
 
 **Status:** Approved Phase 1 seed baseline. **Implementation status (Task 22):** a loader (`src/db/reference_data.py`) implementing this catalog is built and has been run against the real local SQL Server database (`healthcare_ai_fde_lab`) — 78 rows currently loaded across 12 tables: `reasons` (7 — `EVIDENCE_MISMATCH`/`HUMAN_REVIEW` domains only; `CASE_CLOSE`/`DELETE` domains below remain proposed-but-not-loaded, since no currently implemented workflow path references them), `case_statuses` (5), `workflow_statuses` (4), `workflow_actions` (4), `event_categories` (6), `event_types` (15), `actor_types` (4), `source_components` (8), `result_codes` (8), `failure_categories` (8), `workflow_definitions` (1), `workflow_definition_steps` (8 — the complete set below, not only a subset). `document_types`, `requirement_types`, `human_review_statuses`, `human_review_outcomes`, `discovery_item_types`, and `ai_task_types` remain proposed only — not yet loaded, since no currently implemented workflow path requires them. Loader idempotency (insert-missing-only; a semantic conflict on an existing row fails and rolls back the whole load, never silently overwriting) was validated directly against the real database. See [migration_plan.md §17.E](migration_plan.md#17e-task-22--langgraph--sql-persistence-wiring-and-reference-data-loading--complete) for the full validation record. This document's catalog values themselves are unchanged by Task 22 — only their load status is recorded here.
 
+**Task 23 canonical-state additions (Step 23B-2 design, Step 23B-6/7A/7B real load — COMPLETE):** the three rows documented by Step 23B-2 (`workflow_statuses.PENDING_RESUME`, `source_components.HUMAN_REVIEW_SERVICE`, `reasons.HUMAN_REVIEW_UNRESOLVED_MISSING_INFORMATION`) and the `human_review_statuses`/`human_review_outcomes` tables (§17/§18) have since been physically loaded into the real local SQL Server database. Migration `f2fb22e3a41e` (`human_review_statuses`, `human_review_outcomes`, `human_reviews`) was applied (Step 23B-6) and the reference-data loader was run against it (Step 23B-7A) and re-run to prove idempotency (Step 23B-7B). **Real local SQL Server state as of Step 23B-7B: 89 rows across 14 loaded tables** — `reasons` (8), `case_statuses` (5), `workflow_statuses` (5), `workflow_actions` (4), `event_categories` (6), `event_types` (15), `actor_types` (4), `source_components` (9), `result_codes` (8), `failure_categories` (8), `workflow_definitions` (1), `workflow_definition_steps` (8), `human_review_statuses` (4), `human_review_outcomes` (4). `human_reviews` itself remains an empty transaction table (0 rows), as expected — it holds case-specific review rows, not reference/configuration data.
+
+**CASE_CLOSE reason domain (Step 23C-2C1 design/offline validation, Step 23C-2C3/2C4 real load — COMPLETE):** the six `CASE_CLOSE_*` reasons below (§16) are defined in `src/db/reference_data.py` and were first validated by `tests/test_reference_data_loader.py` against an isolated offline SQLite double (Step 23C-2C1) — first-load insertion, second-load idempotency, and semantic-conflict rollback all offline-proven. They have since been loaded into the real local SQL Server database (Step 23C-2C3) and the loader's idempotency was re-proven directly against the resulting real state (Step 23C-2C4: `inserted = 0`, `already_present = 95`, `conflicts = 0`). **Real local SQL Server state as of Step 23C-2C4: 95 rows across 14 loaded tables** — `reasons` is now 14 (the 8 rows recorded in the paragraph above plus these six `CASE_CLOSE_*` rows), with the loaded table count unchanged at 14 (no new table). This supersedes the 89-row/`reasons` = 8 state recorded above, which remains an accurate historical record of the state as of Step 23B-7B. Loading this reference data does not, by itself, mean the `CLOSE_CASE` application workflow is integrated end-to-end — see [architecture.md §7](architecture.md#7-human-in-the-loop-missing-information-handling-and-escalation-boundary) for the current, separate implementation/integration status of Human Review decision handling.
+
+**`WORKFLOW_RESUMED` event type (Task 24B-4A design/offline validation, Task 24B-4D real load — COMPLETE):** the `event_types.WORKFLOW_RESUMED` row (§11; category `WORKFLOW`) was added for the same-run/same-trace resume continuation path (`src/workflow/resume_service.py`, `src/workflow/orchestrator.py`'s continuation core) and first validated offline (`tests/test_reference_data_loader.py`). It was then loaded into the real local SQL Server database and the loader's idempotency was re-proven directly against the resulting real state: first load `inserted = 1` (`event_types:WORKFLOW_RESUMED`), `already_present = 96`; second load `inserted = 0`, `already_present = 97`, `conflicts = 0` both times. **Real local SQL Server state as of Task 24B-4D: 97 rows across the same 14 loaded tables** — only `event_types` changed, from 15 to 16; every other table count is unchanged from the 95-row state recorded above. This supersedes the 95-row state for `event_types`'s count specifically; that paragraph remains an accurate historical record of the state as of Step 23C-2C4. Loading this reference data does not, by itself, mean resume continuation only works because the row exists — `WORKFLOW_RESUMED` is recorded by application code only when automated continuation actually begins (see [architecture.md §7.2](architecture.md#72-stage-2--unresolved-information-escalation-to-human-review) for the full implementation/validation status, including the real-SQL integration test proving the end-to-end path).
+
 ## 1. Seed-data principles
 
 - Codes are stable and machine-readable.
@@ -67,6 +73,7 @@ Canonical Phase 1 workflow-run statuses:
 |---|---|---:|---:|---|
 | `PROCESSING` | Processing | 0 | 0 | Automated workflow is actively executing |
 | `HUMAN_REVIEW_REQUIRED` | Human Review Required | 0 | 1 | Automated processing is paused pending human review |
+| `PENDING_RESUME` | Pending Resume | 0 | 0 | A human review outcome requiring return to automated workflow processing has been recorded; actual post-review automated continuation has not yet started (proposed — not yet loaded; see explanatory note below) |
 | `COMPLETED` | Completed | 1 | 0 | This workflow run completed successfully; use `next_action_code` for the business next step |
 | `FAILED` | Failed | 1 | 1 | Terminal technical/workflow failure where safe automated continuation **or** successful creation/routing of a Human-in-the-Loop review task cannot be established |
 
@@ -75,6 +82,8 @@ Canonical Phase 1 workflow-run statuses:
 A FHIR/AI/integration failure that is successfully and safely routed to human review is **not** `FAILED` — it remains `HUMAN_REVIEW_REQUIRED`, with `failure_category_code` (on the related `workflow_runs`/`audit_events` rows) carrying the specific technical classification. For example: a FHIR provider call fails, the failure is classified, and the workflow successfully creates/routes a human-review task → `HUMAN_REVIEW_REQUIRED`. An AI structured-output validation failure that is successfully routed to human review → likewise `HUMAN_REVIEW_REQUIRED`. Only a failure that additionally prevents safe human-review routing itself — for example, a persistence/orchestration failure — reaches `FAILED`.
 
 Note on the `human_review` column above: it flags that a `FAILED` outcome still ultimately warrants human attention (e.g. manual operational investigation), which is a different thing from the *in-workflow, automated* HITL task creation/routing that `FAILED` specifically means could not be safely established.
+
+**`PENDING_RESUME` semantics (proposed, Task 23/24 boundary — Step 23B-1):** entered after a human review outcome of `CONTINUE_WORKFLOW` is recorded (`human_reviews.review_status_code = COMPLETED`, `review_outcome_code = CONTINUE_WORKFLOW`, `human_review_outcomes.returns_to_workflow = 1`) — the run transitions directly from `HUMAN_REVIEW_REQUIRED` to `PENDING_RESUME`, never by way of `COMPLETED`. `PENDING_RESUME` is nonterminal, and `completed_at_utc` remains `NULL` while in this status. The same `workflow_runs` row and the same `trace_id` are used throughout; a new workflow run or new `trace_id` is never a resume (see [ADR-007](../decisions/ADR-007-trace-id-and-workflow-step-mapping.md)). Task 23 is responsible for the transition **into** this status (recording the decision); Task 24 is responsible for the transition **out of** it, continuing forward from `PENDING_RESUME` on the same row/`trace_id` to the next action or a terminal disposition. Reaching `PENDING_RESUME` does **not** by itself mean the workflow was resumed — no `WORKFLOW_RESUMED` event code exists in `event_types` (§11) yet; that remains deferred to Task 24 and must never be claimed merely because this status was set.
 
 ### Current-code migration mapping
 
@@ -161,6 +170,7 @@ Only types actually needed by the synthetic scenarios should be seeded.
 | event_type_code | category | meaning |
 |---|---|---|
 | `WORKFLOW_STARTED` | `WORKFLOW` | Workflow run started |
+| `WORKFLOW_RESUMED` | `WORKFLOW` | Automated post-review same-run/same-trace continuation actually began (Task 24B-4A design, Task 24B-4D real-SQL load) |
 | `FHIR_RETRIEVAL_STARTED` | `FHIR` | FHIR-style retrieval started |
 | `FHIR_RETRIEVAL_SUCCEEDED` | `FHIR` | FHIR-style retrieval succeeded |
 | `FHIR_RETRIEVAL_FAILED` | `FHIR` | FHIR-style retrieval failed |
@@ -197,6 +207,9 @@ Only types actually needed by the synthetic scenarios should be seeded.
 | `AZURE_OPENAI_ADAPTER` | Azure OpenAI Adapter |
 | `STREAMLIT` | Streamlit UI |
 | `PERSISTENCE` | Persistence Layer |
+| `HUMAN_REVIEW_SERVICE` | Human Review Service |
+
+**`HUMAN_REVIEW_SERVICE` (proposed, Task 23 — not yet loaded):** the application/service boundary responsible for Human-in-the-Loop decision handling — validating Human Review decision-handling preconditions, recording an explicitly supplied human outcome, and applying safe post-decision workflow state handling, including transitioning the workflow into `PENDING_RESUME` (§4) when the recorded outcome is `CONTINUE_WORKFLOW`. The human decision must be explicitly supplied/recorded by the caller; this component never infers or autonomously determines it. It does not perform LangGraph-native execution (`LANGGRAPH` remains reserved for events emitted from within the `graph.invoke()`-wrapping orchestration boundary), does not imply the API or UI layer owns the business decision (`FASTAPI`/`STREAMLIT`), and does not imply the persistence layer itself made the decision (`PERSISTENCE`). It does **not** perform actual same-run/same-`trace_id` workflow continuation out of `PENDING_RESUME` — that remains Task 24.
 
 ## 14. `result_codes`
 
@@ -226,6 +239,11 @@ Technical/workflow failures only.
 | `AI_PROVIDER_FAILED` | AI Provider Failed | 1 | 1 |
 | `AI_OUTPUT_INVALID` | AI Output Invalid | 0 | 1 |
 | `PERSISTENCE_ERROR` | Persistence Error | 1 | 1 |
+
+**Load status note:** The Task 22 loader currently loads the six FHIR
+failure categories plus `AI_PROVIDER_FAILED` and `AI_OUTPUT_INVALID`
+(8 rows total). `PERSISTENCE_ERROR` is documented here as a planned
+canonical value but is not yet loaded in the Task 22 reference-data set.
 
 ## 16. `reasons`
 
@@ -266,6 +284,7 @@ Technical/workflow failures only.
 | `HUMAN_REVIEW_FHIR_FAILURE` | `HUMAN_REVIEW` | FHIR/integration failure |
 | `HUMAN_REVIEW_AI_FAILURE` | `HUMAN_REVIEW` | AI failure or invalid structured output |
 | `HUMAN_REVIEW_AMBIGUITY` | `HUMAN_REVIEW` | Material ambiguity requires a human |
+| `HUMAN_REVIEW_UNRESOLVED_MISSING_INFORMATION` | `HUMAN_REVIEW` | Required information remained unresolved after the approved, already-authorized information process, or could not be obtained within the existing authorized boundary (see [ADR-008](../decisions/ADR-008-least-privilege-escalation-and-missing-information.md)). **Not** first-pass missing information (that path uses `next_action_code = REQUEST_MISSING_INFORMATION`, §5, and creates no `human_reviews` row at all); **not** ambiguity (`HUMAN_REVIEW_AMBIGUITY`); **not** evidence mismatch (`HUMAN_REVIEW_EVIDENCE_MISMATCH`); **not** an AI or FHIR failure (`HUMAN_REVIEW_AI_FAILURE`/`HUMAN_REVIEW_FHIR_FAILURE`); **not** a security-policy violation. Proposed — not yet loaded. |
 
 ## 17. `human_review_statuses`
 

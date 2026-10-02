@@ -10,7 +10,9 @@
 #
 #   Healthcare evidence retrieval failed -> HUMAN_REVIEW_REQUIRED
 #   Healthcare evidence retrieved, facts inconsistent -> HUMAN_REVIEW_REQUIRED
-#   Healthcare evidence retrieved, consistent, case incomplete -> HUMAN_REVIEW_REQUIRED
+#   Healthcare evidence retrieved, consistent, case incomplete -> MISSING_INFORMATION_REQUESTED
+#     (Stage 1 deterministic disposition, ADR-008 -- NOT a Human Review
+#     escalation; no human_reviews row is created)
 #   Healthcare evidence retrieved, consistent, complete, no AI task -> COMPLETE
 #   Healthcare evidence retrieved, consistent, complete, AI task -> AI analysis
 #     AI success                 -> AI_ANALYSIS_COMPLETE
@@ -37,6 +39,7 @@ from src.workflow.nodes import (
     evaluate_completeness_node,
     evaluate_evidence_consistency_node,
     human_review_required_node,
+    request_missing_information_node,
 )
 from src.workflow.state import CaseWorkflowState
 
@@ -87,15 +90,19 @@ def route_after_completeness(state: CaseWorkflowState) -> str:
     """
     Routes the case after the completeness check.
 
-    Complete cases continue to the AI-routing step. Incomplete cases go
-    straight to human review and never reach AI routing or execution.
+    Complete cases continue to the AI-routing step. Incomplete cases
+    route to the Stage 1 missing-information disposition (ADR-008,
+    docs/architecture.md §7.1) -- never directly to human review. Stage 1
+    is a deterministic disposition, not a human-review escalation: no
+    human_reviews row is created, and AI routing/execution is never
+    reached either way.
     """
     result = state["completeness_result"]
 
     if result is not None and result.is_complete:
         return "evaluate_ai_requirement"
 
-    return "human_review_required"
+    return "request_missing_information"
 
 
 def route_after_ai_requirement(state: CaseWorkflowState) -> str:
@@ -154,6 +161,12 @@ def route_after_ai_analysis(state: CaseWorkflowState) -> str:
 #   (e.g., once per test).
 # - The graph never instantiates a live AI provider or a live HTTP
 #   client itself; the caller always supplies both.
+# - graph.compile() below takes no checkpointer. This graph has no
+#   built-in ability to pause mid-run and resume later on its own.
+#   Same-run/same-trace resume (Task 24) is handled outside this graph,
+#   at the application level: src/workflow/resume_service.py re-invokes
+#   this same factory with fresh caller-supplied input, using the same
+#   trace_id, rather than restoring in-graph state from a checkpoint.
 # =====================================================================
 def build_case_workflow_graph(
     ai_provider: AIAnalysisProvider,
@@ -177,6 +190,7 @@ def build_case_workflow_graph(
     graph.add_node("evaluate_ai_requirement", evaluate_ai_requirement_node)
     graph.add_node("complete", complete_node)
     graph.add_node("human_review_required", human_review_required_node)
+    graph.add_node("request_missing_information", request_missing_information_node)
     graph.add_node("ai_analysis_required", ai_analysis_required_node)
     graph.add_node("run_ai_analysis", build_run_ai_analysis_node(ai_provider))
     graph.add_node("ai_analysis_complete", ai_analysis_complete_node)
@@ -203,7 +217,7 @@ def build_case_workflow_graph(
         route_after_completeness,
         {
             "evaluate_ai_requirement": "evaluate_ai_requirement",
-            "human_review_required": "human_review_required",
+            "request_missing_information": "request_missing_information",
         },
     )
     graph.add_conditional_edges(
@@ -225,6 +239,7 @@ def build_case_workflow_graph(
     )
     graph.add_edge("complete", END)
     graph.add_edge("human_review_required", END)
+    graph.add_edge("request_missing_information", END)
     graph.add_edge("ai_analysis_complete", END)
 
     return graph.compile()

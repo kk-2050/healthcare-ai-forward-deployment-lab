@@ -33,6 +33,13 @@ STEP_CODE_AI_ROUTING = "AI_ROUTING"
 STEP_CODE_AI_ANALYSIS = "AI_ANALYSIS"
 STEP_CODE_HUMAN_REVIEW = "HUMAN_REVIEW"
 STEP_CODE_COMPLETE = "COMPLETE"
+# Step 23C-5C: the Stage 1 missing-information disposition (ADR-008,
+# docs/architecture.md §7.1) -- distinct from STEP_CODE_COMPLETENESS_CHECK
+# (the deterministic check itself) and from STEP_CODE_HUMAN_REVIEW (this
+# is explicitly NOT a Human Review escalation), following the same
+# pattern as STEP_CODE_HUMAN_REVIEW/STEP_CODE_COMPLETE already being
+# distinct from the checks that route into them.
+STEP_CODE_REQUEST_MISSING_INFORMATION = "REQUEST_MISSING_INFORMATION"
 
 
 # =====================================================================
@@ -65,6 +72,7 @@ LANGGRAPH_NODE_TO_STEP_CODE: dict[str, str] = {
     "human_review_required": STEP_CODE_HUMAN_REVIEW,
     "complete": STEP_CODE_COMPLETE,
     "ai_analysis_complete": STEP_CODE_COMPLETE,
+    "request_missing_information": STEP_CODE_REQUEST_MISSING_INFORMATION,
 }
 
 
@@ -115,6 +123,7 @@ __all__ = [
     "STEP_CODE_AI_ANALYSIS",
     "STEP_CODE_HUMAN_REVIEW",
     "STEP_CODE_COMPLETE",
+    "STEP_CODE_REQUEST_MISSING_INFORMATION",
     "LANGGRAPH_NODE_TO_STEP_CODE",
     "step_code_for_node",
     "verify_mapping_matches_graph",

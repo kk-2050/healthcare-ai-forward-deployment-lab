@@ -83,25 +83,48 @@ clinical approval or denial decisions — see
   explicit stable LangGraph-node → `step_code` mapping in
   `src/workflow/step_mapping.py` — never a raw Python function name).
   `HUMAN_REVIEW_REQUIRED` is persisted as a pause, not a completion;
-  persistence failures are surfaced, never hidden. Not yet wired to any
-  HTTP endpoint — see Current Limitations.
+  persistence failures are surfaced, never hidden.
+- Human-in-the-Loop decision persistence and same-run/same-trace
+  resume (Tasks 23/24): a genuine `HUMAN_REVIEW_REQUIRED` disposition
+  creates a real `human_reviews` row atomically with the same run's
+  `workflow_runs`/`audit_events` writes. A human reviewer's
+  `CONTINUE_WORKFLOW` decision (`POST /human-review/decisions`) moves
+  the existing run to `PENDING_RESUME`/`CONTINUE_PROCESSING`.
+  `resume_workflow()` (`src/workflow/resume_service.py`, exposed as
+  `POST /workflows/{trace_id}/resume`) then validates eligibility and
+  persisted case identity, atomically claims the SAME run (a race-safe
+  conditional `UPDATE`, never read-then-write), and re-invokes the SAME
+  LangGraph graph on the SAME `trace_id` with fresh caller-supplied
+  input — application-level re-invocation, never LangGraph checkpoint
+  restoration (no checkpointer exists in this project). A
+  `WORKFLOW_RESUMED` audit event is recorded only when that automated
+  continuation actually begins; `WORKFLOW_STARTED` is never re-emitted;
+  a duplicate resume attempt is rejected safely. Validated both offline
+  and directly against the real local SQL Server database.
 - Stable Phase 1 reference/configuration data loader
   (`src/db/reference_data.py`), separate from Alembic schema
   migrations: idempotent insert-missing-only loading with conflict
   detection (a semantic mismatch fails and rolls back the whole load
   rather than silently overwriting). Loaded onto the real local SQL
-  Server database and validated, including a second-run idempotency
-  check (0 inserted, all 78 already present): 78 stable rows across 12
-  tables, including the complete approved 8-step `PRIOR_AUTHORIZATION`
-  workflow definition/configuration.
-- Real local SQL Server integration validation of the orchestration
-  boundary end to end: a synthetic case, mocked FHIR success, the
-  AI-not-needed path, reaching `COMPLETED`/`COMPLETE_WORKFLOW`, with
-  exactly one `workflow_runs` row and six `audit_events` rows
-  persisted, all sharing one `trace_id`, and the synthetic test
-  fixture cleaned up afterward. No Azure OpenAI call and no real
-  external FHIR call were made.
-- pytest test suite (312 tests passing, 1 opt-in real-SQL-Server test
+  Server database and validated, including repeated second-run
+  idempotency checks: **97 stable rows across 14 tables** (the original
+  Task 22 baseline was 78 rows/12 tables; Task 23 added the
+  `human_review_statuses`/`human_review_outcomes` domains and the six
+  `CASE_CLOSE_*` reasons; Task 24 added `event_types.WORKFLOW_RESUMED`),
+  including the complete approved 9-step `PRIOR_AUTHORIZATION` workflow
+  definition/configuration.
+- Real local SQL Server integration validation: the orchestration
+  boundary end to end (a synthetic case, mocked FHIR success, the
+  AI-not-needed path, reaching `COMPLETED`/`COMPLETE_WORKFLOW`); the
+  Human Review decision-transition boundary (including an atomic
+  rollback proof); and the full same-run/same-trace resume path
+  (`HUMAN_REVIEW_REQUIRED` → real `human_reviews` row → `CONTINUE_WORKFLOW`
+  → `PENDING_RESUME` → `resume_workflow()` → same `workflow_run`/same
+  `trace_id` → `WORKFLOW_RESUMED` → `COMPLETED`, with a duplicate resume
+  attempt safely rejected). All synthetic test fixtures are cleaned up
+  afterward. No Azure OpenAI call and no real external FHIR call were
+  made by any of these.
+- pytest test suite (483 tests passing, 4 opt-in real-SQL-Server tests
   intentionally skipped by default, as of this update)
 - Architecture design artifacts (ADRs, architecture/security/
   requirements docs)
@@ -112,14 +135,15 @@ clinical approval or denial decisions — see
 - Wave 6 relational hardening (CHECK constraints, JSON validation,
   secondary indexes, composite FKs, `event_types` composite uniqueness,
   `workflow_runs` composite uniqueness)
-- An API endpoint that invokes the orchestration boundary (`POST
-  /cases/validate` remains validation-only; no endpoint triggers full
-  LangGraph execution/persistence yet)
-- Human-in-the-Loop pause/resume orchestration, reviewer assignment,
-  reviewer UI, reviewer-decision persistence, and final human
-  approval/denial workflow (today the orchestrator persists
-  `HUMAN_REVIEW_REQUIRED` correctly and preserves the run's `trace_id`
-  for a future resume, but does not itself pause/resume anything)
+- An API endpoint that starts a brand-new orchestration run from a
+  fresh case submission (`POST /cases/validate` remains
+  validation-only; `POST /human-review/decisions` and
+  `POST /workflows/{trace_id}/resume` act on an existing run only)
+- Stage 2 unresolved-missing-information escalation to Human Review
+  (Stage 1's deterministic `REQUEST_MISSING_INFORMATION` routing is
+  implemented)
+- Reviewer assignment and a reviewer UI (reviewer identity is currently
+  supplied directly by the caller — no authentication layer exists yet)
 - Streamlit application
 - Remaining end-to-end and productionization work — see
   [docs/production_roadmap.md](docs/production_roadmap.md)
@@ -222,17 +246,26 @@ Phase 2 (production) would require.
 
 - No real external FHIR/payer system integration exists — the
   FHIR-style client uses synthetic data only, not a live production
-  data source.
-- Only 22 of the canonical 36-table Phase 1 database design (see
+  data source. The Resume API's live FHIR dependency is fail-closed by
+  design (it always refuses with a fixed HTTP 503) because no
+  approved, authenticated production FHIR integration contract exists
+  yet — see [docs/security.md](docs/security.md).
+- Only 25 application tables (26 including `alembic_version`) of the
+  canonical 36-table Phase 1 database design (see
   [docs/database/](docs/database/)) are physically built (Waves 1-2).
-  The LangGraph workflow is now wired to persistence (see Current
-  Status), but only as a pure Python orchestration function — no HTTP
-  endpoint invokes it yet, so the running API surface
-  (`POST /cases/validate`) still does not itself persist anything.
-- Human-review *outcomes* (a reviewer's decision) are not yet
-  persisted, and there is no pause/resume orchestration yet — only the
-  `HUMAN_REVIEW_REQUIRED` routing state itself is persisted today.
+  The application now exposes two HTTP endpoints for an existing run:
+  `POST /human-review/decisions` records the Human Review decision,
+  and `POST /workflows/{trace_id}/resume` performs same-run/same-trace
+  continuation. No HTTP endpoint yet starts a brand-new orchestration
+  run from a fresh case submission — `POST /cases/validate` remains
+  validation-only and does not persist a workflow run.
+- Human-review outcomes are persisted and same-run/same-trace resume
+  is implemented (Tasks 23/24) — see Current Status above. Stage 2
+  unresolved-missing-information escalation to Human Review remains
+  not implemented.
 - No Streamlit UI exists yet.
+- No production authentication/authorization layer exists yet —
+  reviewer identity is supplied directly by the caller.
 - Not evaluated for clinical, legal, or regulatory accuracy — it is a
   technical/architectural demonstration only.
 
@@ -288,10 +321,15 @@ summary.
 - Reference/master seed data loading (`src/db/reference_data.py`) —
   idempotent, conflict-detecting, separate from Alembic — is
   implemented and has been run against the real local SQL Server
-  database: 78 stable rows across 12 tables, including the complete
-  8-step `PRIOR_AUTHORIZATION` workflow definition. Synthetic business
-  fixtures (a test client/case) are explicitly not part of this stable
-  catalog and are not loaded by it.
+  database: **97 stable rows across 14 tables** (Task 22 baseline was
+  78 rows/12 tables; Task 23 added the `human_review_statuses`/
+  `human_review_outcomes` domains and the six `CASE_CLOSE_*` reasons;
+  Task 24 added `event_types.WORKFLOW_RESUMED`), including the complete
+  9-step `PRIOR_AUTHORIZATION` workflow definition. Loader idempotency
+  was re-validated after the Task 24 addition (second load:
+  `inserted = 0`, `already_present = 97`). Synthetic business fixtures
+  (a test client/case) are explicitly not part of this stable catalog
+  and are not loaded by it.
 
 **DESIGNED / PLANNED:**
 - The remaining canonical Phase 1 relational data model (Wave 3 and
@@ -300,10 +338,14 @@ summary.
   and client requirement intake. This design has been reviewed and
   approved as the Phase 1 baseline but is implemented incrementally
   through Waves.
-- An API endpoint that invokes the orchestration boundary end to end
-  (the orchestrator itself is implemented; no HTTP route calls it yet).
-- Human-in-the-Loop pause/resume orchestration and reviewer-decision
-  persistence (Task 23 scope).
+- An API endpoint that starts a brand-new orchestration run from a
+  fresh case submission (`POST /human-review/decisions` and
+  `POST /workflows/{trace_id}/resume` already call into the
+  orchestration boundary for an *existing* run — see Current Status).
+- Stage 2 unresolved-missing-information escalation to Human Review
+  (Human-in-the-Loop pause/resume orchestration and reviewer-decision
+  persistence, Task 23 scope, and same-run/same-trace resume, Task 24
+  scope, are both implemented and validated — see Current Status).
 - Wave 6 relational hardening (CHECK constraints, ISJSON validation,
   secondary indexes, composite FKs, the `event_types` composite-FK-support
   uniqueness constraint, and `workflow_runs` composite uniqueness) —

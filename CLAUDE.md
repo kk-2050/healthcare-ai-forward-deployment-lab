@@ -40,12 +40,14 @@ These have already been reviewed and decided (see
   use: `alembic.ini` and `migrations/` (`env.py`, `script.py.mako`,
   `versions/`) exist and are wired to the project's existing
   SQLAlchemy metadata and secure database configuration. **Revision
-  `c841e86a8516` (Wave 1 database foundation) and revision
+  `c841e86a8516` (Wave 1 database foundation), revision
   `b9aba5b07ac8` (Wave 2 canonical case/workflow schema, including the
   controlled rebuild of `workflow_runs`/`audit_events` into their
-  canonical shape) have both been successfully applied to the real
+  canonical shape), and revision `f2fb22e3a41e` (Human-in-the-Loop
+  persistence tables — `human_review_statuses`, `human_review_outcomes`,
+  `human_reviews`) have all been successfully applied to the real
   local SQL Server database (`healthcare_ai_fde_lab`) and validated
-  (Tasks 20B, 21B).** Do not substitute a different migration
+  (Tasks 20B, 21B, 23B).** Do not substitute a different migration
   mechanism without explicit approval, and do not create a migration
   revision (`alembic revision`), run `alembic upgrade`/`downgrade`/
   `stamp`, or modify the schema outside an explicitly approved,
@@ -58,8 +60,14 @@ These have already been reviewed and decided (see
 3. Explicit Python business rules run before LLM reasoning.
 4. LLMs are used only for ambiguity/language/summarization-type tasks —
    never to make the final approval/denial decision.
-5. Missing information, low-confidence AI output, or rule-flagged cases
-   go to human review, not a guessed outcome.
+5. Missing information must never be guessed or fabricated. Initial
+   missing information is handled deterministically through
+   `REQUEST_MISSING_INFORMATION` using only approved, authenticated,
+   already-authorized sources and permissions. If the authorized
+   process cannot resolve it, preserve the value as `MISSING`/`UNKNOWN`,
+   stop further retrieval attempts, and route to Human Review.
+   Low-confidence AI output and rule-flagged cases continue to route to
+   Human Review as defined by the workflow.
 6. Keep deterministic facts/rules, AI inference, and human decisions
    clearly separated in the data model — never blended.
 7. Workflow states and routing must be explicit (LangGraph graph is the
@@ -89,6 +97,70 @@ Full detail: [docs/architecture.md](docs/architecture.md).
   Ordinary technical constants are fine in code.
 - Full detail: [docs/security.md](docs/security.md).
 
+### Universal Least-Privilege Escalation Boundary — NON-NEGOTIABLE
+
+This applies to this project and is a standing rule for all future
+work, in any project, not only Phase 1. See
+[ADR-008](docs/decisions/ADR-008-least-privilege-escalation-and-missing-information.md)
+for the full decision record.
+
+Automation (deterministic rules, AI-assisted steps, integrations) may
+use ONLY: authenticated APIs it is already configured to call,
+explicitly approved FHIR-style/integration endpoints, explicitly
+approved data sources, and permissions already granted to the current
+service account/user.
+
+Automation must NEVER, including to obtain missing information:
+- Exceed the current service-account/user's permissions.
+- Bypass or circumvent access controls.
+- Fall back to a prohibited or unapproved data source.
+- Request, trigger, or imply a permission change for itself.
+- Retrieve more PHI/PII or sensitive data than the task actually needs,
+  or persist unnecessary PHI/PII.
+- Log secrets, credentials, tokens, passwords, connection strings, raw
+  LLM prompts, or raw LLM/provider responses.
+
+If required information cannot be obtained within the current
+authorized boundary: STOP automated retrieval. Do not broaden
+permissions. Do not try another unapproved source. Escalate safely
+(route to human review, per the approved workflow) instead. The audit
+trail must make it possible to determine what was needed, which
+approved source/component was used, what result occurred, why
+automation stopped or continued, and what next action was selected —
+using only the structured audit fields already defined in this
+project's schema, never free-text secrets or unnecessary PHI/PII.
+
+### Missing Information Safety Contract — NON-NEGOTIABLE
+
+See [docs/security.md §8](docs/security.md#8-missing-information-safety-contract)
+for the full contract; this is the condensed, binding summary.
+
+Missing/unknown information stays `MISSING`/`UNKNOWN` until verified
+evidence arrives from an approved source. It must NEVER be fabricated,
+guessed, or inferred and then treated/persisted as a verified fact —
+including by AI. AI may explain what is missing, summarize verified
+information, or draft a clarification request; AI may NEVER invent a
+missing fact, infer one and have it persisted as verified, or use
+another case's data to fill the gap.
+
+`REQUEST_MISSING_INFORMATION` means only the explicitly approved
+request/retrieval operation through already-authorized channels — it
+does NOT mean "search anywhere necessary." **Not explicitly allowed =
+DENY**: an integration, source, endpoint, retrieval mechanism, or data
+use must be explicitly approved before use; absence of a prohibition is
+not permission.
+
+Only the minimum necessary PHI/PII or other sensitive information may
+be requested, retrieved, persisted, exposed, or transmitted for that
+specific purpose.
+
+If the authorized process cannot resolve missing information: STOP
+further automated retrieval attempts — but still continue safe
+deterministic state handling, audit recording, and routing/escalation
+to Human Review. Human Review is a decision/safety boundary only — it
+never expands the automation's own permissions, sources, or access,
+before, during, or after review.
+
 ## Working Conventions
 
 - Do not describe planned/not-yet-implemented backend behavior as if it
@@ -102,20 +174,68 @@ Full detail: [docs/architecture.md](docs/architecture.md).
   keep the "Current Status" section accurate as work progresses.
 - The LangGraph ↔ SQL persistence orchestration boundary
   (`src/workflow/orchestrator.py`) and the stable node → `step_code`
-  mapping (`src/workflow/step_mapping.py`) are implemented (Task 22) —
-  a pure Python function, not wired to any HTTP endpoint yet. The
-  stable reference/configuration loader (`src/db/reference_data.py`)
-  is implemented, idempotent, and has been run against the real local
-  SQL Server database (78 rows across 12 tables). It is separate from
-  Alembic and from synthetic business/test fixtures — never add a
-  client/case/business row to it, and never silently overwrite a
-  conflicting existing row; a real semantic conflict must fail loudly.
-  The opt-in real SQL Server integration test
-  (`tests/test_workflow_orchestrator_integration.py`) is skipped by
-  ordinary `pytest`; only run it with
+  mapping (`src/workflow/step_mapping.py`) are **IMPLEMENTED AND
+  VALIDATED** (Task 22). `POST /human-review/decisions` and
+  `POST /workflows/{trace_id}/resume` (`src/api/app.py`, Tasks 23C-7A/
+  24B-4C) are the two HTTP endpoints that invoke it today — a fresh
+  case submission still has no HTTP endpoint that starts a brand-new
+  orchestration run (`POST /cases/validate` remains deterministic-
+  completeness-check-only and never persists). The stable reference/
+  configuration loader (`src/db/reference_data.py`) is implemented,
+  idempotent, and has been run against the real local SQL Server
+  database: **97 rows across 14 tables**, including the
+  `human_review_statuses`/`human_review_outcomes` domains, the six
+  `CASE_CLOSE_*` reason rows (Task 23C), and `event_types.
+  WORKFLOW_RESUMED` (Task 24B-4D — `event_types` is now 16 rows;
+  idempotency re-validated on a second load: `inserted=0`,
+  `already_present=97`). It is separate from Alembic and from
+  synthetic business/test fixtures — never add a client/case/business
+  row to it, and never silently overwrite a conflicting existing row;
+  a real semantic conflict must fail loudly. The opt-in real SQL
+  Server integration tests (`tests/test_workflow_orchestrator_integration.py`,
+  `tests/test_human_review_sql_server_integration.py`,
+  `tests/test_workflow_resume_sql_server_integration.py`) are skipped
+  by ordinary `pytest`; only run one with
   `RUN_SQL_SERVER_INTEGRATION_TESTS=1` explicitly set, and only after
   the same review-then-approve discipline used for every other
   live-database action in this project.
+- **Task 23 (human-in-the-loop persistence): IMPLEMENTED AND
+  VALIDATED.** Human-review request/decision persistence
+  (`src/db/human_review_repository.py`, `src/db/repository.py`,
+  `src/db/case_repository.py`, `src/workflow/human_review_service.py`)
+  is wired into `src/workflow/orchestrator.py`: a genuine
+  `HUMAN_REVIEW_REQUIRED` disposition (FHIR failure, evidence mismatch,
+  or AI failure) creates a real `human_reviews` row atomically with the
+  `workflow_runs`/`audit_events` writes for that run. All four approved
+  outcomes, the shared atomic transaction, and duplicate/cancelled/
+  idempotent-replay handling are validated both offline and directly
+  against the real local SQL Server database. **NOT IMPLEMENTED:**
+  Stage 2 unresolved-missing-information escalation in
+  `src/workflow/graph.py` (Stage 1's deterministic
+  `REQUEST_MISSING_INFORMATION` routing is implemented).
+- **Task 24 (same-run/same-trace resume continuation): IMPLEMENTED AND
+  VALIDATED**, both offline and against real SQL Server
+  (`tests/test_workflow_resume_sql_server_integration.py`). A
+  `CONTINUE_WORKFLOW` Human Review decision (`resume_after_human_review()`)
+  moves the existing `workflow_runs` row to `PENDING_RESUME`/
+  `CONTINUE_PROCESSING` (`completed_at_utc` stays NULL) — by itself this
+  is only an application-level state transition, not automated
+  continuation. Automated continuation is
+  `src/workflow/resume_service.py`'s `resume_workflow()` (the sole
+  public entry point, exposed as `POST /workflows/{trace_id}/resume`):
+  it validates resume eligibility and the persisted case identity,
+  atomically claims the run via a race-safe conditional `UPDATE` (never
+  read-then-write), then re-invokes the SAME compiled LangGraph graph
+  on the SAME `trace_id` with fresh, caller-supplied input. There is no
+  LangGraph checkpointer anywhere in this project — this is
+  application-level re-invocation, never LangGraph checkpoint
+  restoration; do not describe it otherwise. `WORKFLOW_RESUMED` is
+  recorded only when that automated continuation actually begins, with
+  an `event_id` deterministically derived from the authorizing
+  `review_id`; `WORKFLOW_STARTED` is never re-emitted on resume. A
+  duplicate resume attempt is rejected safely and changes nothing.
+  `CONTINUE_WORKFLOW` means automation may continue processing — it is
+  never a clinical approval/denial decision.
 - Alembic is initialized and in active use (see Fixed Technology
   Decisions and
   [ADR-005](docs/decisions/ADR-005-database-schema-migration-strategy.md)):

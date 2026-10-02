@@ -435,3 +435,87 @@ class AuditEventORM(Base):
 
     created_at_utc: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     created_by: Mapped[str] = mapped_column(String(128), nullable=False)
+
+
+# =====================================================================
+# HUMAN REVIEWS TABLE (Task 23 -- pulled forward from Wave 4)
+# Purpose:
+# One Human-in-the-Loop review task and its outcome, for one workflow
+# run. AI never writes review_outcome_code -- only a human reviewer
+# (via the future Streamlit review UI) or, in tests, a synthetic
+# reviewer identity does.
+#
+# Why:
+# workflow_runs.human_review_required only flags THAT a run is paused
+# for review; this table records the review task itself -- why it was
+# requested, its lifecycle status, who (synthetically) reviewed it, and
+# what they decided. See docs/database/data_dictionary.md `human_reviews`
+# and the module docstring in
+# migrations/versions/f2fb22e3a41e_create_human_review_persistence_tables.py
+# for the full Wave-pull-forward rationale.
+#
+# Important Notes:
+# - trace_id/case_id get real ForeignKey()s (WorkflowRunORM/
+#   PriorAuthorizationCaseORM both have ORM classes here). Every other
+#   FK-shaped column (review_status_code, review_outcome_code,
+#   reason_code, assigned_department_id, assigned_location_id,
+#   reviewer_actor_type_code, source_component_code) references a
+#   table with no ORM class (Wave 1 raw DDL, or the two new reference
+#   masters this task adds, which follow that same no-ORM-class
+#   precedent) -- see this file's module-level Foreign Key Policy
+#   docstring.
+# - review_status_code defaults to "REQUESTED"; review_outcome_code
+#   stays NULL until a human decision is recorded.
+# - No approval/denial column exists anywhere on this table -- only
+#   the four codes in human_review_outcomes (CONTINUE_WORKFLOW,
+#   REQUEST_MORE_INFORMATION, ESCALATE, CLOSE_CASE), none of which is
+#   an autonomous clinical decision.
+# =====================================================================
+class HumanReviewORM(Base):
+    """One human-in-the-loop review task and its recorded outcome."""
+
+    __tablename__ = "human_reviews"
+
+    review_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    trace_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workflow_runs.trace_id"),
+        nullable=False,
+    )
+    case_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("prior_authorization_cases.case_id"),
+        nullable=False,
+    )
+    # No physical FK: human_review_statuses has no ORM class (see policy above).
+    review_status_code: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="REQUESTED"
+    )
+    # No physical FK: human_review_outcomes has no ORM class.
+    review_outcome_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # No physical FK: reasons has no ORM class (Wave 1, raw DDL only).
+    reason_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    assigned_department_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    assigned_location_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    requested_at_utc: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    started_at_utc: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at_utc: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    reviewer_actor_type_code: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    reviewer_reference: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    review_note_text: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    source_component_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    metadata_json: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    created_at_utc: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    updated_at_utc: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    updated_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    deleted_at_utc: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    deleted_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    delete_reason_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    delete_reason_text: Mapped[str | None] = mapped_column(String(1000), nullable=True)

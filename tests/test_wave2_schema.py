@@ -72,11 +72,43 @@ _WAVE_1_TABLES = {
 }
 
 
+_WAVE_2_ORM_CLASSES = (
+    DocumentTypeORM,
+    WorkflowDefinitionORM,
+    WorkflowDefinitionStepORM,
+    PriorAuthorizationCaseORM,
+    CaseDiagnosisORM,
+    CaseDocumentORM,
+    WorkflowRunORM,
+    AuditEventORM,
+)
+
+
 def make_test_engine():
-    """Builds a throwaway in-memory SQLite engine and creates every table
-    declared on Base -- structural validation only, see module docstring."""
+    """Builds a throwaway in-memory SQLite engine containing ONLY the
+    Wave 2 ORM tables -- not the full shared Base.metadata.
+
+    Base is a single registry shared by every ORM class declared in
+    src/db/models.py, including later-wave classes such as Task 23's
+    HumanReviewORM. Importing any name from that module -- including
+    the Wave 2 classes this file needs -- executes the whole module
+    and registers every class on it, regardless of which names were
+    imported (confirmed directly: this file's own import line is
+    sufficient to register HumanReviewORM on Base.metadata, even
+    though this file never mentions it). An unrestricted
+    Base.metadata.create_all(engine) therefore reflects whatever else
+    has been defined anywhere in src/db/models.py, not "Wave 2."
+
+    Restricting create_all() to exactly these 8 classes' own tables
+    (via SQLAlchemy's `tables=` parameter) is what makes this file's
+    "exactly the Wave 2 tables, no more, no less" tests correct and
+    durable, independent of any other ORM class added elsewhere in the
+    project, now or in the future.
+    """
     engine = create_engine("sqlite+pysqlite:///:memory:")
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(
+        engine, tables=[cls.__table__ for cls in _WAVE_2_ORM_CLASSES]
+    )
     return engine
 
 
