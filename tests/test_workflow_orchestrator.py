@@ -353,6 +353,131 @@ def test_workflow_run_status_updated_on_normal_completion():
 
 
 # =====================================================================
+# CASE-STATUS LIFECYCLE CORRECTION TESTS (Task 25B-1/25B-2)
+# Purpose:
+# Protect the corrected case_status_code resolution added to the
+# ordinary (ADR-008) and genuine Human Review dispositions:
+# case_status_code must never be confused with workflow_status_code --
+# a run finishing or failing is a technical fact, not a business case
+# closure. These tests supply case_repository/session_factory
+# explicitly (optional on the public signature; see
+# src/workflow/orchestrator.py's own docstring) to exercise the
+# corrected behavior; the pre-existing tests above/below that omit them
+# continue to prove the exact legacy behavior is unchanged for callers
+# that never created a case row.
+# =====================================================================
+def test_direct_normal_completion_sets_case_open():
+    """Verify a direct (non-resumed) ordinary COMPLETED disposition
+    resolves case_status_code -> OPEN, never leaving it stuck at
+    IN_PROGRESS, and never populating close fields."""
+    engine = make_test_engine()
+    repository = make_repository(engine)
+    case_repository = make_case_repository(engine)
+    now = datetime.now(timezone.utc)
+    insert_synthetic_case_row(engine, "SYN-CASE-ORCH-001", now)
+
+    result = run_orchestrator(
+        repository=repository,
+        case_repository=case_repository,
+        session_factory=sessionmaker(bind=engine),
+    )
+
+    saved = repository.get_workflow_run(result.trace_id)
+    assert saved.workflow_status_code == "COMPLETED"
+    assert saved.next_action_code == "COMPLETE_WORKFLOW"
+    assert case_repository.get_case_status_code("SYN-CASE-ORCH-001") == "OPEN"
+
+    with sessionmaker(bind=engine)() as session:
+        case_row = session.get(PriorAuthorizationCaseORM, "SYN-CASE-ORCH-001")
+        assert case_row.closed_at_utc is None
+        assert case_row.close_reason_code is None
+
+
+def test_unhandled_graph_exception_with_case_repository_sets_case_open():
+    """Verify a technical FAILED disposition (not a safe FHIR/AI
+    fallback) also resolves case_status_code -> OPEN when
+    case_repository is supplied -- the case remains open/unresolved,
+    never CLOSED, and workflow_status_code still correctly reports
+    FAILED."""
+    engine = make_test_engine()
+    repository = make_repository(engine)
+    case_repository = make_case_repository(engine)
+    now = datetime.now(timezone.utc)
+    insert_synthetic_case_row(engine, "SYN-CASE-ORCH-001", now)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise RuntimeError("synthetic unmodeled failure")
+
+    fhir_client = FHIRStyleClient(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        base_url="https://synthetic-fhir-style.example.internal",
+    )
+
+    with pytest.raises(OrchestratorError):
+        run_orchestrator(
+            fhir_client=fhir_client,
+            repository=repository,
+            case_repository=case_repository,
+            session_factory=sessionmaker(bind=engine),
+        )
+
+    assert case_repository.get_case_status_code("SYN-CASE-ORCH-001") == "OPEN"
+
+    with sessionmaker(bind=engine)() as session:
+        from src.db.models import WorkflowRunORM
+
+        runs = session.query(WorkflowRunORM).filter_by(
+            case_id="SYN-CASE-ORCH-001"
+        ).all()
+        assert len(runs) == 1
+        assert runs[0].workflow_status_code == "FAILED"
+
+    with sessionmaker(bind=engine)() as session:
+        case_row = session.get(PriorAuthorizationCaseORM, "SYN-CASE-ORCH-001")
+        assert case_row.close_reason_code is None
+
+
+def test_ordinary_disposition_case_repository_without_session_factory_raises():
+    """Verify supplying case_repository without session_factory for an
+    ordinary disposition is treated as a genuine caller-configuration
+    error (OrchestratorError), never as a silent skip of the
+    case-status write -- mirrors the existing Stage 1 dependency
+    check."""
+    engine = make_test_engine()
+    case_repository = make_case_repository(engine)
+
+    with pytest.raises(OrchestratorError):
+        run_orchestrator(repository=make_repository(engine), case_repository=case_repository)
+
+
+def test_human_review_required_sets_case_status():
+    """Verify a genuine HUMAN_REVIEW_REQUIRED disposition resolves
+    case_status_code -> HUMAN_REVIEW_REQUIRED (never left at
+    IN_PROGRESS) when case_repository is supplied."""
+    engine = make_test_engine()
+    repository = make_repository(engine)
+    human_review_repository = make_human_review_repository(engine)
+    case_repository = make_case_repository(engine)
+    now = datetime.now(timezone.utc)
+    insert_synthetic_case_row(engine, "SYN-CASE-ORCH-001", now)
+    fhir_client = make_fhir_client(status_code=500, json_body={"error": "synthetic"})
+
+    result = run_orchestrator(
+        fhir_client=fhir_client,
+        repository=repository,
+        human_review_repository=human_review_repository,
+        case_repository=case_repository,
+        session_factory=sessionmaker(bind=engine),
+    )
+
+    saved = repository.get_workflow_run(result.trace_id)
+    assert saved.workflow_status_code == "HUMAN_REVIEW_REQUIRED"
+    assert case_repository.get_case_status_code("SYN-CASE-ORCH-001") == (
+        "HUMAN_REVIEW_REQUIRED"
+    )
+
+
+# =====================================================================
 # STAGE 1 MISSING-INFORMATION DISPOSITION TESTS (Step 23C-5C, ADR-008)
 # Purpose:
 # Protect the corrected routing: an ordinary initial deterministic

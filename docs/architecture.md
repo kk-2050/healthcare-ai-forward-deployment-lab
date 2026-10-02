@@ -121,8 +121,11 @@ disposable synthetic rows were intentionally removed, not preserved.
 orchestration function — generates one `trace_id` per run, invokes the
 existing LangGraph graph, and persists `workflow_runs`/`audit_events`
 via `AuditRepository` — validated end to end against real SQL Server
-(see below). It is not yet wired to any HTTP endpoint; `src/api/app.py`
-still exposes only the validation-only `POST /cases/validate`.
+(see below). `src/api/app.py` now wires it to three HTTP endpoints —
+`POST /workflows` (Task 25B, a brand-new run), `POST
+/human-review/decisions` (Task 23C-7A), and `POST
+/workflows/{trace_id}/resume` (Task 24B-4C) — alongside the
+validation-only, non-persistent `POST /cases/validate`.
 
 **Target Phase 1 design:** a canonical 36-table relational model
 (organizational masters, case/workflow persistence, deterministic
@@ -194,11 +197,18 @@ one `trace_id` persisted consistently across one `workflow_runs` row
 and six `audit_events` rows, with `workflow_step_id` resolved from the
 real `workflow_definition_steps` rows loaded by
 `src/db/reference_data.py`. `POST /human-review/decisions` and
-`POST /workflows/{trace_id}/resume` (`src/api/app.py`) now call into
-this orchestration boundary for an existing run's Human Review
-decision and same-run/same-trace resume, respectively (Tasks 23C-7A/
-24B-4C); a fresh case submission still has no HTTP endpoint that
-starts a brand-new orchestration run.
+`POST /workflows/{trace_id}/resume` (`src/api/app.py`) call into this
+orchestration boundary for an existing run's Human Review decision and
+same-run/same-trace resume, respectively (Tasks 23C-7A/24B-4C).
+**`POST /workflows` (Task 25B, `src/workflow/case_intake_service.py`)
+starts a brand-new orchestration run for a fresh/safely-retried case**
+— implemented and validated offline (not yet proven against real SQL
+Server). That fresh-intake path, and the resume path above, do not
+currently supply `step_code_to_workflow_step_id` to the orchestrator,
+so some of their audit events have `workflow_step_id = NULL` — the
+`workflow_definition_steps` catalog itself remains fully loaded; this
+is a current Phase 1 audit-enrichment limitation, not missing
+reference data.
 
 ## 7. Human-in-the-Loop: Missing-Information Handling and Escalation Boundary
 

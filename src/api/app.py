@@ -19,12 +19,18 @@ from src.api.dependencies import (
     get_session_factory,
     get_workflow_repository,
 )
-from src.db.case_repository import CaseRepository, PersistenceError as CasePersistenceError
+from src.db.case_repository import (
+    CaseAlreadyExistsError,
+    CaseRepository,
+    ClientNotFoundError,
+    PersistenceError as CasePersistenceError,
+)
 from src.db.human_review_repository import (
     HumanReviewConflictError,
     HumanReviewRepository,
     PersistenceError as HumanReviewPersistenceError,
 )
+from src.db.reference_data import workflow_definition_id
 from src.db.repository import AuditEventConflictError, AuditRepository, PersistenceError
 from src.integrations.fhir_client import FHIRStyleClient
 from src.models.api import CaseValidationRequest, CaseValidationResponse
@@ -33,7 +39,9 @@ from src.models.human_review_api import (
     HumanReviewDecisionResponse,
 )
 from src.models.resume_api import ResumeWorkflowRequest, ResumeWorkflowResponse
+from src.models.workflow_api import StartWorkflowRequest, StartWorkflowResponse
 from src.rules.completeness import evaluate_completeness
+from src.workflow.case_intake_service import start_new_case_workflow
 from src.workflow.human_review_service import (
     InvalidCloseReasonError,
     ResumeError,
@@ -394,6 +402,128 @@ def resume_workflow_endpoint(
         )
 
     return ResumeWorkflowResponse(
+        trace_id=result.trace_id,
+        case_id=workflow_run.case_id,
+        workflow_run=workflow_run,
+        audit_events=result.audit_events,
+    )
+
+
+# =====================================================================
+# FRESH-CASE WORKFLOW START ENDPOINT (Task 25B)
+# Purpose:
+# Starts a brand-new workflow run for a fresh (or safely-retried) case
+# intake, via start_new_case_workflow() -- the sole supported
+# application-level entry point for this boundary
+# (src/workflow/case_intake_service.py).
+#
+# Why:
+# This is a thin transport boundary, matching every other endpoint
+# above: FastAPI/Pydantic handle input shape, and this function's only
+# remaining job is to invoke the service exactly once and translate its
+# already-defined domain/persistence exceptions into HTTP responses. It
+# owns NONE of the actual intake/claim/workflow logic -- client
+# validation, duplicate/safe-retry resolution, the atomic case claim,
+# claim compensation, and graph execution all belong entirely to
+# start_new_case_workflow() and the functions it calls -- never
+# duplicated here.
+#
+# Important Notes:
+# - client_id must identify an existing, active, non-deleted client --
+#   this endpoint never creates one.
+# - trace_id comes ONLY from the application: this endpoint never
+#   accepts one from the caller and always starts a genuinely new run
+#   (or, for a safe retry, continues an existing case with zero prior
+#   workflow runs -- never a second run for a case that already has
+#   one).
+# - The response never includes WorkflowRunResult.final_state -- see
+#   src/models/workflow_api.py for why. case_id is read from the
+#   persisted workflow_run, not merely echoed from the request.
+# - The response-shaping read (workflow_repository.get_workflow_run())
+#   runs inside the same try block as start_new_case_workflow(), so a
+#   repository failure there is caught by the same safe
+#   PersistenceError -> fixed 500 mapping below, exactly mirroring the
+#   Resume endpoint's own defensive pattern.
+# - Error mapping below: ClientNotFoundError -> 404;
+#   CaseAlreadyExistsError -> 409, with a single FIXED public message
+#   regardless of its internal reason_category -- the category (which
+#   field mismatched, whether another client owns the case, etc.) is
+#   never exposed to the caller; any persistence failure or
+#   OrchestratorError -> 500 with a fixed, safe message. No exception
+#   is ever caught and converted into a false-success 2xx response.
+# - get_fhir_client()/get_ai_provider() are resolved lazily, per
+#   request, by FastAPI's own Depends() mechanism, exactly as the
+#   Resume endpoint already does -- get_fhir_client() fails closed by
+#   default (src/api/dependencies.py), turned into a fixed 503 by this
+#   module's existing exception handler above, before
+#   start_new_case_workflow() is ever called.
+# - Phase 1 has no authentication/authorization layer. No caller
+#   identity field exists on this request beyond client_id, which
+#   identifies an existing business client, not a human caller.
+# =====================================================================
+@app.post(
+    "/workflows",
+    response_model=StartWorkflowResponse,
+    status_code=201,
+)
+def start_workflow_endpoint(
+    request: StartWorkflowRequest,
+    session_factory: Callable[[], Session] = Depends(get_session_factory),
+    workflow_repository: AuditRepository = Depends(get_workflow_repository),
+    human_review_repository: HumanReviewRepository = Depends(get_human_review_repository),
+    case_repository: CaseRepository = Depends(get_case_repository),
+    fhir_client: FHIRStyleClient = Depends(get_fhir_client),
+    ai_provider: AIAnalysisProvider = Depends(get_ai_provider),
+) -> StartWorkflowResponse:
+    """
+    Starts a brand-new workflow run for a fresh case submission, via
+    start_new_case_workflow().
+
+    Pydantic has already rejected malformed input (missing fields,
+    wrong types, unknown fields) by the time this function runs.
+    """
+    try:
+        result = start_new_case_workflow(
+            client_id=request.client_id,
+            case=request.case,
+            completeness_requirements=request.completeness_requirements,
+            ai_processing_requirements=request.ai_processing_requirements,
+            ai_provider=ai_provider,
+            fhir_client=fhir_client,
+            workflow_repository=workflow_repository,
+            human_review_repository=human_review_repository,
+            case_repository=case_repository,
+            session_factory=session_factory,
+            workflow_definition_id=workflow_definition_id(),
+        )
+        workflow_run = workflow_repository.get_workflow_run(result.trace_id)
+    except ClientNotFoundError as error:
+        raise HTTPException(
+            status_code=404, detail="The specified client could not be found."
+        ) from error
+    except CaseAlreadyExistsError as error:
+        raise HTTPException(
+            status_code=409,
+            detail="This case_id already exists and cannot be used for a new intake.",
+        ) from error
+    except (HumanReviewPersistenceError, PersistenceError, CasePersistenceError) as error:
+        raise HTTPException(
+            status_code=500,
+            detail="The case/workflow could not be persisted.",
+        ) from error
+    except OrchestratorError as error:
+        raise HTTPException(
+            status_code=500,
+            detail="Workflow execution could not complete.",
+        ) from error
+
+    if workflow_run is None:
+        raise HTTPException(
+            status_code=500,
+            detail="The workflow start response could not be built.",
+        )
+
+    return StartWorkflowResponse(
         trace_id=result.trace_id,
         case_id=workflow_run.case_id,
         workflow_run=workflow_run,

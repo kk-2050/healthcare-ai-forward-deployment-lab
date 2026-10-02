@@ -7,7 +7,7 @@ import uuid
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -628,6 +628,29 @@ class AuditRepository:
         finally:
             if owns_session:
                 active_session.close()
+
+    def case_has_workflow_run(self, case_id: str) -> bool:
+        """
+        Read-only. Returns True if at least one workflow_runs row
+        already exists for this case_id.
+
+        Used only by src/workflow/case_intake_service.py (Task 25B) to
+        distinguish a genuine duplicate fresh-intake attempt from a
+        safe retry after an earlier workflow-start failure -- never
+        used by any write path, and never changes any row.
+        """
+        with self._session_factory() as session:
+            try:
+                count = session.execute(
+                    select(func.count())
+                    .select_from(WorkflowRunORM)
+                    .where(WorkflowRunORM.case_id == case_id)
+                ).scalar_one()
+            except SQLAlchemyError as error:
+                raise PersistenceError(
+                    "Failed to check existing workflow runs for case."
+                ) from error
+        return count > 0
 
     def list_audit_events(self, trace_id: str) -> list[AuditEvent]:
         """

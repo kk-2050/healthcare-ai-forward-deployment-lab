@@ -223,6 +223,7 @@ def advance_to_pending_resume(
         repository=repository,
         workflow_definition_id=_WORKFLOW_DEFINITION_ID,
         human_review_repository=human_review_repository,
+        case_repository=case_repository,
         session_factory=sessionmaker(bind=engine),
     )
     pending_review = human_review_repository.get_pending_review_by_trace_id(
@@ -531,11 +532,24 @@ def test_graph_invocation_failure_persists_workflow_resumed_and_failed(monkeypat
     """Verify that when graph.invoke() itself fails unsafely,
     WORKFLOW_RESUMED and WORKFLOW_FAILED are persisted together
     atomically (via _persist_resumed_terminal_disposition()), the run
-    is marked FAILED, and OrchestratorError is raised."""
+    is marked FAILED, OrchestratorError is raised, and (Task 25B-1)
+    case_status_code resolves to OPEN -- the case remains open/
+    unresolved, never CLOSED, even though this resumed run itself
+    failed."""
     engine, repository, human_review_repository, case_repository = make_environment()
     case = make_case()
     insert_case_row(engine, case)
     insert_claimed_workflow_run(engine, case)
+    # Simulate the real claimed-for-resume case state (IN_PROGRESS) so
+    # the assertion below actually proves the FAILED disposition moved
+    # it to OPEN, rather than it merely staying at insert_case_row()'s
+    # own OPEN default.
+    case_repository.update_case_status(
+        case_id=case.case_id,
+        case_status_code="IN_PROGRESS",
+        updated_by="SYSTEM",
+        updated_at_utc=datetime.now(timezone.utc),
+    )
 
     monkeypatch.setattr(
         orchestrator_module, "build_case_workflow_graph", lambda *a, **k: _RaisingGraph()
@@ -565,6 +579,7 @@ def test_graph_invocation_failure_persists_workflow_resumed_and_failed(monkeypat
     assert resumed_event.event_id == deterministic_human_review_event_id(
         "review_invocation_failure", "WORKFLOW_RESUMED"
     )
+    assert case_repository.get_case_status_code(case.case_id) == "OPEN"
 
 
 # =====================================================================
@@ -574,7 +589,12 @@ def test_resume_workflow_completes_successfully_via_public_entry_point():
     """Verify the full authorized path -- HUMAN_REVIEW_REQUIRED ->
     CONTINUE_WORKFLOW decision -> resume_workflow() with a corrected
     FHIR client -- completes the run as COMPLETED, using ONLY the
-    public resume_workflow() entry point."""
+    public resume_workflow() entry point. Also verifies the Task 25B-1
+    case-status lifecycle correction: the case started this test at
+    HUMAN_REVIEW_REQUIRED (set when it first paused for review) and
+    must resolve to OPEN once the resumed run reaches its own final
+    COMPLETED disposition -- never left at HUMAN_REVIEW_REQUIRED or
+    IN_PROGRESS."""
     engine, repository, human_review_repository, case_repository = make_environment()
     case = make_case()
     insert_case_row(engine, case)
@@ -586,6 +606,7 @@ def test_resume_workflow_completes_successfully_via_public_entry_point():
         case=case,
         fhir_client=make_fhir_client(status_code=500, json_body={"error": "synthetic"}),
     )
+    assert case_repository.get_case_status_code(case.case_id) == "HUMAN_REVIEW_REQUIRED"
 
     result = resume_workflow(
         trace_id=trace_id,
@@ -603,6 +624,7 @@ def test_resume_workflow_completes_successfully_via_public_entry_point():
     assert result.trace_id == trace_id
     saved = repository.get_workflow_run(trace_id)
     assert saved.workflow_status_code == "COMPLETED"
+    assert case_repository.get_case_status_code(case.case_id) == "OPEN"
 
 
 def test_resume_workflow_passes_qualifying_review_id_to_workflow_resumed():

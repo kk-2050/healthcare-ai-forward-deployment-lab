@@ -85,6 +85,31 @@ _WORKFLOW_STATUS_TO_CODE: dict[WorkflowStatus, str] = {
 
 _TERMINAL_WORKFLOW_STATUS_CODES = {"COMPLETED", "FAILED"}
 
+# =====================================================================
+# CASE-STATUS LIFECYCLE CODES (Task 25B-1 correction)
+# Purpose:
+# case_status_code (prior_authorization_cases) is a BUSINESS/case
+# lifecycle fact, independent of any one workflow run.
+# workflow_status_code (workflow_runs) is the TECHNICAL execution
+# outcome of one specific run. They must never be confused: a run
+# finishing (COMPLETED) or breaking (FAILED) is not the same as the
+# business case being closed. Only a genuine human CLOSE_CASE decision
+# (src/workflow/human_review_service.py) sets case_status_code=CLOSED.
+#
+# _CASE_STATUS_OPEN is used once a run's automated processing has
+# concluded either way (COMPLETED or FAILED): the case is not clinically
+# closed, remains available for whatever real-world step comes next,
+# and matches this status's own canonical description ("Case exists
+# and may be processed") and PriorAuthorizationCaseORM's own column
+# default.
+#
+# _CASE_STATUS_HUMAN_REVIEW_REQUIRED is used while a run is genuinely
+# paused waiting for a reviewer -- matching this status's own canonical
+# description ("Automated processing paused for reviewer") exactly.
+# =====================================================================
+_CASE_STATUS_OPEN = "OPEN"
+_CASE_STATUS_HUMAN_REVIEW_REQUIRED = "HUMAN_REVIEW_REQUIRED"
+
 _FHIR_FAILURE_TO_FAILURE_CATEGORY_CODE: dict[FHIRIntegrationFailureType, str] = {
     FHIRIntegrationFailureType.HTTP_ERROR: "FHIR_HTTP_ERROR",
     FHIRIntegrationFailureType.MALFORMED_JSON: "FHIR_MALFORMED_JSON",
@@ -210,6 +235,22 @@ def run_prior_authorization_workflow(
     request behind it. Callers whose cases never reach either
     disposition (e.g. the ordinary complete path) do not need to supply
     any of case_repository/human_review_repository/session_factory.
+
+    case_repository (Task 25B-1 correction) is ALSO used, optionally,
+    for the case-status lifecycle fix: when supplied, every ordinary
+    COMPLETED/FAILED disposition resolves case_status_code -> OPEN
+    (see _persist_ordinary_final_disposition()) and every genuine
+    HUMAN_REVIEW_REQUIRED disposition resolves it -> HUMAN_REVIEW_REQUIRED
+    (see _persist_human_review_required_disposition()) -- a run
+    finishing or failing is a technical fact about that run, never a
+    business case closure, so neither path ever sets CLOSED. This
+    parameter stays optional on this public signature so existing
+    callers that never created a case row are unaffected; the two real
+    application entry points (fresh-case intake, same-trace resume)
+    always supply it and always receive the corrected behavior. If
+    case_repository is supplied without session_factory for a run that
+    reaches an ordinary disposition, this raises OrchestratorError
+    rather than silently skipping the case-status write.
     """
     trace_id = str(uuid.uuid4())
     started_at_utc = datetime.now(timezone.utc)
@@ -267,8 +308,20 @@ def run_prior_authorization_workflow(
         final_state: CaseWorkflowState = graph.invoke(initial_state)
     except Exception as error:
         failed_at_utc = datetime.now(timezone.utc)
-        _persist_final_run(
+        failure_event = _make_event(
+            trace_id=trace_id,
+            case_id=case.case_id,
+            event_type_code="WORKFLOW_FAILED",
+            event_category_code=AuditEventCategory.WORKFLOW,
+            source_component_code=initiated_by_component_code,
+            result_code="FAILED",
+            occurred_at_utc=failed_at_utc,
+            created_by=created_by,
+        )
+        _persist_ordinary_final_disposition(
             repository=repository,
+            case_repository=case_repository,
+            session_factory=session_factory,
             trace_id=trace_id,
             case_id=case.case_id,
             workflow_definition_id=workflow_definition_id,
@@ -281,18 +334,8 @@ def run_prior_authorization_workflow(
             next_action_code=None,
             completed_at_utc=failed_at_utc,
             updated_at_utc=failed_at_utc,
+            step_events=[failure_event],
         )
-        failure_event = _make_event(
-            trace_id=trace_id,
-            case_id=case.case_id,
-            event_type_code="WORKFLOW_FAILED",
-            event_category_code=AuditEventCategory.WORKFLOW,
-            source_component_code=initiated_by_component_code,
-            result_code="FAILED",
-            occurred_at_utc=failed_at_utc,
-            created_by=created_by,
-        )
-        repository.append_audit_event(failure_event)
         audit_events.append(failure_event)
         raise OrchestratorError(
             "Workflow execution failed unsafely; run marked FAILED."
@@ -368,6 +411,7 @@ def run_prior_authorization_workflow(
         _persist_human_review_required_disposition(
             repository=repository,
             human_review_repository=human_review_repository,
+            case_repository=case_repository,
             session_factory=session_factory,
             trace_id=trace_id,
             case_id=case.case_id,
@@ -382,8 +426,10 @@ def run_prior_authorization_workflow(
             reason_code=human_review_reason_code,
         )
     else:
-        _persist_final_run(
+        _persist_ordinary_final_disposition(
             repository=repository,
+            case_repository=case_repository,
+            session_factory=session_factory,
             trace_id=trace_id,
             case_id=case.case_id,
             workflow_definition_id=workflow_definition_id,
@@ -396,9 +442,8 @@ def run_prior_authorization_workflow(
             next_action_code=next_action_code,
             completed_at_utc=run_completed_at_utc,
             updated_at_utc=completed_at_utc,
+            step_events=step_events,
         )
-        for event in step_events:
-            repository.append_audit_event(event)
 
     audit_events.extend(step_events)
 
@@ -454,6 +499,132 @@ def _persist_final_run(
         ),
         session=session,
     )
+
+
+# =====================================================================
+# ORDINARY FINAL DISPOSITION PERSISTENCE (Task 25B-1 correction)
+# Purpose:
+# Persists a DIRECT (non-resumed) run's ordinary terminal disposition --
+# COMPLETED (next_action_code=COMPLETE_WORKFLOW) or FAILED -- and, when
+# case_repository is supplied, resolves case_status_code -> OPEN
+# atomically with that same write. This is the single shared place
+# that decision is made for the direct path; the resumed path's
+# equivalent decision is made by _persist_resumed_terminal_disposition()
+# below, so the "COMPLETED/FAILED -> OPEN" rule itself is written once,
+# not duplicated between the two paths.
+#
+# Why OPEN, never CLOSED: a workflow run finishing (successfully or
+# not) is a TECHNICAL fact about that run, not a business decision that
+# the case is resolved. Only a genuine human CLOSE_CASE outcome
+# (src/workflow/human_review_service.py) may set CLOSED. A FAILED run
+# also resolves to OPEN, not a new "FAILED" case status: the case still
+# exists and is still unresolved: workflow_status_code=FAILED already
+# carries the technical failure fact, and case_has_workflow_run()
+# (used by src/workflow/case_intake_service.py's duplicate check)
+# already independently prevents a second workflow from silently
+# starting for a case that has real run history, regardless of what
+# case_status_code says -- so returning a failed case to OPEN here
+# creates no new duplicate-processing risk.
+#
+# case_repository stays OPTIONAL here (never newly required on
+# run_prior_authorization_workflow()'s own public signature) so that
+# older/simpler callers who have never created a case row at all --
+# including existing offline tests -- keep today's exact behavior:
+# workflow_runs is updated and these audit events are appended
+# independently, with no case-status write attempted. Both real
+# production callers (the fresh-case intake API and the same-trace
+# resume path) always supply case_repository, so they always receive
+# the corrected behavior. A caller that supplies case_repository but
+# not session_factory is an internally inconsistent configuration --
+# this is refused outright (OrchestratorError) rather than silently
+# skipping the case-status write, mirroring the existing Stage 1
+# dependency check below.
+# =====================================================================
+def _persist_ordinary_final_disposition(
+    *,
+    repository: AuditRepository,
+    case_repository: CaseRepository | None,
+    session_factory: Callable[[], Session] | None,
+    trace_id: str,
+    case_id: str,
+    workflow_definition_id: str,
+    initiated_by_component_code: str,
+    started_at_utc: datetime,
+    created_by: str,
+    workflow_status_code: str,
+    human_review_required: bool,
+    failure_category_code: str | None,
+    next_action_code: str | None,
+    completed_at_utc: datetime | None,
+    updated_at_utc: datetime,
+    step_events: list[AuditEvent],
+) -> None:
+    """Updates the workflow_runs row with this run's ordinary terminal
+    outcome and appends its final audit events. When case_repository is
+    supplied, also resolves case_status_code -> OPEN, committed
+    atomically with the two writes above in one caller-owned session
+    (session_factory is then required). When case_repository is
+    omitted, preserves the exact pre-existing behavior: an independent
+    workflow_runs write followed by independent audit-event writes."""
+    if case_repository is not None:
+        if session_factory is None:
+            raise OrchestratorError(
+                "session_factory is required when case_repository is "
+                "supplied, so the case-status update can commit "
+                "atomically with the workflow_runs update and its audit "
+                "events."
+            )
+        session = session_factory()
+        try:
+            _persist_final_run(
+                repository=repository,
+                trace_id=trace_id,
+                case_id=case_id,
+                workflow_definition_id=workflow_definition_id,
+                initiated_by_component_code=initiated_by_component_code,
+                started_at_utc=started_at_utc,
+                created_by=created_by,
+                workflow_status_code=workflow_status_code,
+                human_review_required=human_review_required,
+                failure_category_code=failure_category_code,
+                next_action_code=next_action_code,
+                completed_at_utc=completed_at_utc,
+                updated_at_utc=updated_at_utc,
+                session=session,
+            )
+            case_repository.update_case_status(
+                case_id=case_id,
+                case_status_code=_CASE_STATUS_OPEN,
+                updated_by=created_by,
+                updated_at_utc=updated_at_utc,
+                session=session,
+            )
+            for event in step_events:
+                repository.append_audit_event(event, session=session)
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+    else:
+        _persist_final_run(
+            repository=repository,
+            trace_id=trace_id,
+            case_id=case_id,
+            workflow_definition_id=workflow_definition_id,
+            initiated_by_component_code=initiated_by_component_code,
+            started_at_utc=started_at_utc,
+            created_by=created_by,
+            workflow_status_code=workflow_status_code,
+            human_review_required=human_review_required,
+            failure_category_code=failure_category_code,
+            next_action_code=next_action_code,
+            completed_at_utc=completed_at_utc,
+            updated_at_utc=updated_at_utc,
+        )
+        for event in step_events:
+            repository.append_audit_event(event)
 
 
 # =====================================================================
@@ -540,6 +711,15 @@ def _persist_stage1_disposition(
 # review-request write, never leaving contradictory partial state.
 # Only for the three genuine Human Review routes (FHIR failure,
 # evidence mismatch, AI failure) -- never for Stage 1.
+#
+# case_repository (Task 25B-1 correction, optional): when supplied,
+# also resolves case_status_code -> HUMAN_REVIEW_REQUIRED inside this
+# SAME transaction, so the case is never left showing IN_PROGRESS while
+# processing is actually paused for a reviewer. Stays optional for the
+# identical backward-compatibility reason given in
+# _persist_ordinary_final_disposition() above: older/simpler callers
+# (including existing offline tests) that never supply it keep today's
+# exact behavior.
 # =====================================================================
 def _persist_human_review_required_disposition(
     *,
@@ -557,11 +737,13 @@ def _persist_human_review_required_disposition(
     updated_at_utc: datetime,
     step_events: list[AuditEvent],
     reason_code: str,
+    case_repository: CaseRepository | None = None,
 ) -> None:
     """Opens one session and commits the HUMAN_REVIEW_REQUIRED
-    workflow_runs update, this run's final audit events, and the
-    durable human_reviews request together -- or rolls all of them back
-    together."""
+    workflow_runs update, this run's final audit events, the durable
+    human_reviews request, and (when case_repository is supplied) the
+    case's HUMAN_REVIEW_REQUIRED status -- together, or rolls all of
+    them back together."""
     session = session_factory()
     try:
         _persist_final_run(
@@ -580,6 +762,14 @@ def _persist_human_review_required_disposition(
             updated_at_utc=updated_at_utc,
             session=session,
         )
+        if case_repository is not None:
+            case_repository.update_case_status(
+                case_id=case_id,
+                case_status_code=_CASE_STATUS_HUMAN_REVIEW_REQUIRED,
+                updated_by=created_by,
+                updated_at_utc=updated_at_utc,
+                session=session,
+            )
         for event in step_events:
             repository.append_audit_event(event, session=session)
         request_human_review(
@@ -974,10 +1164,24 @@ def _revert_resume_claim(
 # must never be left split by a partial failure -- WORKFLOW_RESUMED
 # recorded with no disposition, or a disposition with no record that a
 # resume actually happened, would both be misleading audit states.
+#
+# case_repository (Task 25B-1 correction): resolves case_status_code ->
+# OPEN inside this SAME transaction, for exactly the same reason given
+# in _persist_ordinary_final_disposition() above -- a resumed run
+# finishing (COMPLETED) or breaking (FAILED) is still only a technical
+# fact, never a business closure, and this is the single shared place
+# that decision is made for every resumed terminal disposition.
+# case_repository is REQUIRED here (unlike the direct path's optional
+# parameter of the same name): this function's only caller,
+# _continue_claimed_workflow_processing(), already requires
+# case_repository on its own signature -- every resumed run already has
+# it available, so there is no legacy/backward-compatibility case to
+# preserve here.
 # =====================================================================
 def _persist_resumed_terminal_disposition(
     *,
     repository: AuditRepository,
+    case_repository: CaseRepository,
     session_factory: Callable[[], Session],
     trace_id: str,
     case_id: str,
@@ -994,8 +1198,8 @@ def _persist_resumed_terminal_disposition(
     step_events: list[AuditEvent],
 ) -> None:
     """Opens one session and commits the resumed run's workflow_runs
-    update and its final audit events together -- or rolls both back
-    together."""
+    update, its final audit events, and the case's resolved OPEN status
+    together -- or rolls all of them back together."""
     session = session_factory()
     try:
         _persist_final_run(
@@ -1011,6 +1215,13 @@ def _persist_resumed_terminal_disposition(
             failure_category_code=failure_category_code,
             next_action_code=next_action_code,
             completed_at_utc=completed_at_utc,
+            updated_at_utc=updated_at_utc,
+            session=session,
+        )
+        case_repository.update_case_status(
+            case_id=case_id,
+            case_status_code=_CASE_STATUS_OPEN,
+            updated_by=created_by,
             updated_at_utc=updated_at_utc,
             session=session,
         )
@@ -1188,6 +1399,7 @@ def _continue_claimed_workflow_processing(
         )
         _persist_resumed_terminal_disposition(
             repository=repository,
+            case_repository=case_repository,
             session_factory=session_factory,
             trace_id=trace_id,
             case_id=case.case_id,
@@ -1266,6 +1478,7 @@ def _continue_claimed_workflow_processing(
         _persist_human_review_required_disposition(
             repository=repository,
             human_review_repository=human_review_repository,
+            case_repository=case_repository,
             session_factory=session_factory,
             trace_id=trace_id,
             case_id=case.case_id,
@@ -1282,6 +1495,7 @@ def _continue_claimed_workflow_processing(
     else:
         _persist_resumed_terminal_disposition(
             repository=repository,
+            case_repository=case_repository,
             session_factory=session_factory,
             trace_id=trace_id,
             case_id=case.case_id,

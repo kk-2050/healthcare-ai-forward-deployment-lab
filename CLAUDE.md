@@ -175,30 +175,34 @@ before, during, or after review.
 - The LangGraph ↔ SQL persistence orchestration boundary
   (`src/workflow/orchestrator.py`) and the stable node → `step_code`
   mapping (`src/workflow/step_mapping.py`) are **IMPLEMENTED AND
-  VALIDATED** (Task 22). `POST /human-review/decisions` and
-  `POST /workflows/{trace_id}/resume` (`src/api/app.py`, Tasks 23C-7A/
-  24B-4C) are the two HTTP endpoints that invoke it today — a fresh
-  case submission still has no HTTP endpoint that starts a brand-new
-  orchestration run (`POST /cases/validate` remains deterministic-
-  completeness-check-only and never persists). The stable reference/
-  configuration loader (`src/db/reference_data.py`) is implemented,
-  idempotent, and has been run against the real local SQL Server
-  database: **97 rows across 14 tables**, including the
+  VALIDATED** (Task 22). Four HTTP endpoints exist in `src/api/app.py`:
+  `POST /cases/validate` (deterministic validation only, never
+  persists), `POST /workflows` (Task 25B — starts a brand-new
+  orchestration run for a fresh/safely-retried case via
+  `src/workflow/case_intake_service.py`), `POST /human-review/decisions`
+  (Task 23C-7A), and `POST /workflows/{trace_id}/resume` (Task 24B-4C —
+  same-run/same-trace continuation for an existing run). The stable
+  reference/configuration loader (`src/db/reference_data.py`) is
+  implemented, idempotent, and has been run against the real local SQL
+  Server database: **97 rows across 14 tables**, including the
   `human_review_statuses`/`human_review_outcomes` domains, the six
-  `CASE_CLOSE_*` reason rows (Task 23C), and `event_types.
+  `CASE_CLOSE_*` reason rows (Task 23C), `event_types.
   WORKFLOW_RESUMED` (Task 24B-4D — `event_types` is now 16 rows;
   idempotency re-validated on a second load: `inserted=0`,
-  `already_present=97`). It is separate from Alembic and from
-  synthetic business/test fixtures — never add a client/case/business
-  row to it, and never silently overwrite a conflicting existing row;
-  a real semantic conflict must fail loudly. The opt-in real SQL
+  `already_present=97`), and the complete 9-row `workflow_definition_steps`
+  catalog (including `REQUEST_MISSING_INFORMATION`, Step 23C-5C). It is
+  separate from Alembic and from synthetic business/test fixtures —
+  never add a client/case/business row to it, and never silently
+  overwrite a conflicting existing row; a real semantic conflict must
+  fail loudly. The opt-in real SQL
   Server integration tests (`tests/test_workflow_orchestrator_integration.py`,
   `tests/test_human_review_sql_server_integration.py`,
   `tests/test_workflow_resume_sql_server_integration.py`) are skipped
   by ordinary `pytest`; only run one with
   `RUN_SQL_SERVER_INTEGRATION_TESTS=1` explicitly set, and only after
   the same review-then-approve discipline used for every other
-  live-database action in this project.
+  live-database action in this project. Task 25B has not yet had its
+  own opt-in real SQL Server integration test written.
 - **Task 23 (human-in-the-loop persistence): IMPLEMENTED AND
   VALIDATED.** Human-review request/decision persistence
   (`src/db/human_review_repository.py`, `src/db/repository.py`,
@@ -236,6 +240,30 @@ before, during, or after review.
   duplicate resume attempt is rejected safely and changes nothing.
   `CONTINUE_WORKFLOW` means automation may continue processing — it is
   never a clinical approval/denial decision.
+- **Task 25B (fresh-case workflow intake): IMPLEMENTED AND VALIDATED —
+  offline** (`src/workflow/case_intake_service.py`, exposed as
+  `POST /workflows`). Validates `client_id` against an existing,
+  active, non-deleted `clients` row (no client auto-creation); resolves
+  fresh/duplicate/safe-retry case state via a six-field durable
+  identity (including `client_id`, deliberately separate from Task
+  24's five-field resume identity); claims a case for processing via a
+  race-safe conditional `UPDATE` (reusing the existing, previously-
+  unused `case_statuses.IN_PROGRESS` value — no migration, no new
+  reference-data row); reverts that claim only when no `workflow_runs`
+  row was ever created. **Task 25B-1/25B-2 case-status lifecycle
+  correction:** `case_status_code` now resolves to `OPEN` after
+  ordinary automated completion or a persisted technical `FAILED` run,
+  and to `HUMAN_REVIEW_REQUIRED` while a run is genuinely paused for a
+  reviewer — for both a direct run and a same-run/same-trace resumed
+  run; `CLOSED` remains set only by a genuine Human Review `CLOSE_CASE`
+  decision. `case_repository` stays optional on the orchestrator's
+  public signature for backward compatibility; the real production
+  callers (fresh intake, resume) always supply it. Ordinary pytest:
+  525 passed, 4 skipped, 0 failed. **Not yet proven against real SQL
+  Server** (unlike Tasks 23/24, which are both offline- and real-SQL-
+  validated) — see the opt-in integration tests above. `FHIR_MODE` (a
+  synthetic runtime mode for normal local use) is explicitly deferred
+  to Task 25C; the Streamlit UI remains not implemented.
 - Alembic is initialized and in active use (see Fixed Technology
   Decisions and
   [ADR-005](docs/decisions/ADR-005-database-schema-migration-strategy.md)):

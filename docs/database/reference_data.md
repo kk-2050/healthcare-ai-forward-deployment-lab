@@ -15,6 +15,16 @@ Author: K.Kashiwagi
 
 **`WORKFLOW_RESUMED` event type (Task 24B-4A design/offline validation, Task 24B-4D real load — COMPLETE):** the `event_types.WORKFLOW_RESUMED` row (§11; category `WORKFLOW`) was added for the same-run/same-trace resume continuation path (`src/workflow/resume_service.py`, `src/workflow/orchestrator.py`'s continuation core) and first validated offline (`tests/test_reference_data_loader.py`). It was then loaded into the real local SQL Server database and the loader's idempotency was re-proven directly against the resulting real state: first load `inserted = 1` (`event_types:WORKFLOW_RESUMED`), `already_present = 96`; second load `inserted = 0`, `already_present = 97`, `conflicts = 0` both times. **Real local SQL Server state as of Task 24B-4D: 97 rows across the same 14 loaded tables** — only `event_types` changed, from 15 to 16; every other table count is unchanged from the 95-row state recorded above. This supersedes the 95-row state for `event_types`'s count specifically; that paragraph remains an accurate historical record of the state as of Step 23C-2C4. Loading this reference data does not, by itself, mean resume continuation only works because the row exists — `WORKFLOW_RESUMED` is recorded by application code only when automated continuation actually begins (see [architecture.md §7.2](architecture.md#72-stage-2--unresolved-information-escalation-to-human-review) for the full implementation/validation status, including the real-SQL integration test proving the end-to-end path).
 
+**Task 25B (fresh-case workflow intake) note:** Task 25B does not load,
+add, or change any reference/configuration data — the 97-row/14-table
+total above is unchanged by it. While reviewing Task 25B's documentation
+(Task 25B-3), this document's own §7 catalog table was found to still
+list only 8 `workflow_definition_steps` steps; the real loader
+(`src/db/reference_data.py`) has loaded 9 since Step 23C-5C
+(`REQUEST_MISSING_INFORMATION`), already reflected in README.md/
+CLAUDE.md's "9-step" wording. §7 below is corrected to match; this is
+a documentation correction only, not a reference-data change.
+
 ## 1. Seed-data principles
 
 - Codes are stable and machine-readable.
@@ -119,7 +129,19 @@ The current Python `WorkflowStatus` enum predates the relational status model.
 
 ## 7. `workflow_definition_steps`
 
-Proposed semantic steps; exact IDs are generated during seeding. **Loaded (Task 22):** all 8 steps below are loaded, each with a deterministic `workflow_step_id` of the form `wfstep_prior_authorization_1_0_<step_code, lowercased>` (e.g. `wfstep_prior_authorization_1_0_fhir_retrieval`) — the same deterministic-ID convention as `workflow_definition_id` above, not a random UUID.
+Proposed semantic steps; exact IDs are generated during seeding.
+**Loaded (Task 22; step count corrected Task 25B-3):** all 9 steps
+below are loaded, each with a deterministic `workflow_step_id` of the
+form `wfstep_prior_authorization_1_0_<step_code, lowercased>` (e.g.
+`wfstep_prior_authorization_1_0_fhir_retrieval`) — the same
+deterministic-ID convention as `workflow_definition_id` above, not a
+random UUID. `REQUEST_MISSING_INFORMATION` (step_order 45) was added
+for Step 23C-5C's Stage 1 missing-information disposition; this
+table's prose was not updated at that time and is corrected now (Task
+25B-3) — the row itself was already loaded, and already included in
+the 97-row/14-table total recorded above. See README.md/CLAUDE.md,
+which already correctly described this as a "9-step" workflow
+definition.
 
 | step_code | step_order | optional | purpose |
 |---|---:|---:|---|
@@ -127,6 +149,7 @@ Proposed semantic steps; exact IDs are generated during seeding. **Loaded (Task 
 | `FHIR_RETRIEVAL` | 20 | 0 | Retrieve synthetic FHIR-style evidence |
 | `EVIDENCE_CONSISTENCY` | 30 | 0 | Compare case vs. retrieved evidence |
 | `COMPLETENESS_CHECK` | 40 | 0 | Deterministic required-information check |
+| `REQUEST_MISSING_INFORMATION` | 45 | 1 | Stage 1 deterministic missing-information disposition (Step 23C-5C) |
 | `AI_ROUTING` | 50 | 0 | Decide whether AI is needed |
 | `AI_ANALYSIS` | 60 | 1 | Structured AI analysis when required |
 | `HUMAN_REVIEW` | 70 | 1 | Human-in-the-loop path |

@@ -124,7 +124,30 @@ clinical approval or denial decisions — see
   attempt safely rejected). All synthetic test fixtures are cleaned up
   afterward. No Azure OpenAI call and no real external FHIR call were
   made by any of these.
-- pytest test suite (483 tests passing, 4 opt-in real-SQL-Server tests
+- Fresh-case workflow-start API (Task 25B): `POST /workflows`
+  (`src/api/app.py`, `src/models/workflow_api.py`) starts a brand-new
+  orchestration run for a fresh synthetic case through
+  `src/workflow/case_intake_service.py`'s `start_new_case_workflow()` —
+  the application generates `trace_id`; `client_id` must identify an
+  existing, active, non-deleted client (no client auto-creation); the
+  fresh case is persisted before the orchestrator runs; a race-safe
+  conditional-`UPDATE` claim (reusing the existing, previously-unused
+  `case_statuses.IN_PROGRESS` value) and a six-field duplicate/safe-retry
+  identity check (including `client_id`) prevent two runs ever starting
+  for the same case; a pre-first-write failure safely reverts the
+  claim. **Case-status lifecycle correction (Task 25B-1/25B-2):**
+  `case_status_code` now resolves correctly once a run leaves
+  `IN_PROGRESS` — `OPEN` after ordinary automated completion or a
+  persisted technical `FAILED` run (automation finishing or failing is
+  never a business closure), `HUMAN_REVIEW_REQUIRED` while a run is
+  genuinely paused for a reviewer, and `CLOSED` only via a genuine
+  Human Review `CLOSE_CASE` decision — covering both a direct run and a
+  same-run/same-trace resumed run. Returns HTTP 201 and never exposes
+  raw `final_state`/FHIR/AI content or the internal conflict
+  `reason_category`. **IMPLEMENTED AND VALIDATED — offline** (see
+  Current Limitations below for what has not yet been proven against
+  real SQL Server).
+- pytest test suite (525 tests passing, 4 opt-in real-SQL-Server tests
   intentionally skipped by default, as of this update)
 - Architecture design artifacts (ADRs, architecture/security/
   requirements docs)
@@ -135,10 +158,10 @@ clinical approval or denial decisions — see
 - Wave 6 relational hardening (CHECK constraints, JSON validation,
   secondary indexes, composite FKs, `event_types` composite uniqueness,
   `workflow_runs` composite uniqueness)
-- An API endpoint that starts a brand-new orchestration run from a
-  fresh case submission (`POST /cases/validate` remains
-  validation-only; `POST /human-review/decisions` and
-  `POST /workflows/{trace_id}/resume` act on an existing run only)
+- A synthetic FHIR runtime mode for normal local FastAPI/Streamlit use
+  (`FHIR_MODE`, Task 25C) — today, a real HTTP request that does not
+  override the FHIR dependency always fails closed with a fixed 503
+  (see Current Limitations below)
 - Stage 2 unresolved-missing-information escalation to Human Review
   (Stage 1's deterministic `REQUEST_MISSING_INFORMATION` routing is
   implemented)
@@ -244,26 +267,50 @@ Phase 2 (production) would require.
 
 ## 10. Current Limitations
 
-- No real external FHIR/payer system integration exists — the
-  FHIR-style client uses synthetic data only, not a live production
-  data source. The Resume API's live FHIR dependency is fail-closed by
-  design (it always refuses with a fixed HTTP 503) because no
-  approved, authenticated production FHIR integration contract exists
-  yet — see [docs/security.md](docs/security.md).
+- **FHIR integration boundary — IMPLEMENTED:** the FHIR-style client
+  abstraction (`src/integrations/fhir_client.py`), the fail-closed
+  FastAPI dependency boundary (`src/api/dependencies.py`'s
+  `get_fhir_client()`), and offline mocked FHIR test paths
+  (`httpx.MockTransport`, never a live network call). **NOT YET
+  IMPLEMENTED:** an approved, authenticated, live production FHIR
+  integration, and a synthetic FHIR runtime mode for normal local
+  FastAPI/Streamlit use (planned as `FHIR_MODE`, Task 25C). Today, a
+  real HTTP request against any endpoint that depends on
+  `get_fhir_client()` (the Resume API and the fresh-case workflow-start
+  API) and does not override that dependency always fails closed with
+  a fixed HTTP 503 — see [docs/security.md](docs/security.md). A test
+  overriding this dependency with `httpx.MockTransport` is an offline
+  test double, never a normal runtime capability.
 - Only 25 application tables (26 including `alembic_version`) of the
   canonical 36-table Phase 1 database design (see
   [docs/database/](docs/database/)) are physically built (Waves 1-2).
-  The application now exposes two HTTP endpoints for an existing run:
-  `POST /human-review/decisions` records the Human Review decision,
-  and `POST /workflows/{trace_id}/resume` performs same-run/same-trace
-  continuation. No HTTP endpoint yet starts a brand-new orchestration
-  run from a fresh case submission — `POST /cases/validate` remains
-  validation-only and does not persist a workflow run.
+  The application now exposes four HTTP endpoints: `POST
+  /cases/validate` (deterministic validation only, non-persistent, does
+  not start a workflow), `POST /workflows` (Task 25B — starts a
+  brand-new workflow run for a fresh/safely-retried case), `POST
+  /human-review/decisions` (records a Human Review decision for an
+  existing run), and `POST /workflows/{trace_id}/resume` (same-run/
+  same-trace continuation for an existing run).
+- `POST /workflows`'s fresh-intake/resume callers do not currently
+  supply `step_code_to_workflow_step_id` to the orchestrator, so some
+  audit events for these paths can have `workflow_step_id = NULL` — the
+  `workflow_definition_steps` catalog itself is loaded (9 rows; see
+  [docs/database/reference_data.md](docs/database/reference_data.md)),
+  this is a current Phase 1 audit-enrichment limitation, not missing
+  reference data. `audit_events.workflow_step_id` is nullable.
 - Human-review outcomes are persisted and same-run/same-trace resume
   is implemented (Tasks 23/24) — see Current Status above. Stage 2
   unresolved-missing-information escalation to Human Review remains
-  not implemented.
-- No Streamlit UI exists yet.
+  not implemented. The external Stage 1 requester notification/
+  response transport remains planned, not implemented.
+- No Streamlit UI exists yet. Task 25B provides the fresh-workflow
+  FastAPI boundary (`POST /workflows`) that a future Streamlit UI will
+  use — the UI itself remains planned, not implemented, and no mocked
+  UI exists.
+- Task 25B is implemented and validated **offline** only — it has not
+  yet had its own opt-in real SQL Server integration proof (unlike
+  Tasks 23/24, which are both offline- and real-SQL-validated; see
+  Current Status above).
 - No production authentication/authorization layer exists yet —
   reviewer identity is supplied directly by the caller.
 - Not evaluated for clinical, legal, or regulatory accuracy — it is a
@@ -338,10 +385,6 @@ summary.
   and client requirement intake. This design has been reviewed and
   approved as the Phase 1 baseline but is implemented incrementally
   through Waves.
-- An API endpoint that starts a brand-new orchestration run from a
-  fresh case submission (`POST /human-review/decisions` and
-  `POST /workflows/{trace_id}/resume` already call into the
-  orchestration boundary for an *existing* run — see Current Status).
 - Stage 2 unresolved-missing-information escalation to Human Review
   (Human-in-the-Loop pause/resume orchestration and reviewer-decision
   persistence, Task 23 scope, and same-run/same-trace resume, Task 24
