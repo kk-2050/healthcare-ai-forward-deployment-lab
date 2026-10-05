@@ -175,13 +175,16 @@ before, during, or after review.
 - The LangGraph ↔ SQL persistence orchestration boundary
   (`src/workflow/orchestrator.py`) and the stable node → `step_code`
   mapping (`src/workflow/step_mapping.py`) are **IMPLEMENTED AND
-  VALIDATED** (Task 22). Four HTTP endpoints exist in `src/api/app.py`:
+  VALIDATED** (Task 22). Six HTTP endpoints exist in `src/api/app.py`:
   `POST /cases/validate` (deterministic validation only, never
   persists), `POST /workflows` (Task 25B — starts a brand-new
   orchestration run for a fresh/safely-retried case via
   `src/workflow/case_intake_service.py`), `POST /human-review/decisions`
-  (Task 23C-7A), and `POST /workflows/{trace_id}/resume` (Task 24B-4C —
-  same-run/same-trace continuation for an existing run). The stable
+  (Task 23C-7A), `POST /workflows/{trace_id}/resume` (Task 24B-4C —
+  same-run/same-trace continuation for an existing run), and two
+  read-only lookups (Task 26B) — `GET /workflows/{trace_id}` and
+  `GET /human-review/pending/{trace_id}` — that reuse existing
+  repository read methods unchanged and never mutate state. The stable
   reference/configuration loader (`src/db/reference_data.py`) is
   implemented, idempotent, and has been run against the real local SQL
   Server database: **97 rows across 14 tables**, including the
@@ -296,6 +299,30 @@ before, during, or after review.
   the same. Ordinary pytest: **552 passed, 4 skipped, 0 failed.** No
   real SQL was run, no live FHIR was called, and no live AI was called
   for Task 25C. The Streamlit UI remains **NOT IMPLEMENTED**.
+- **Task 26B (Streamlit backend prework): IMPLEMENTED AND VALIDATED —
+  offline.** Two read-only endpoints close the gaps found during
+  Task 26A's UI design review: `GET /workflows/{trace_id}` (reuses
+  `AuditRepository.get_workflow_run()`/`list_audit_events()` unchanged)
+  and `GET /human-review/pending/{trace_id}` (reuses
+  `HumanReviewRepository.get_pending_review_by_trace_id()` unchanged —
+  that method already excludes `COMPLETED`/`CANCELLED` reviews). Both
+  are strictly read-only: no write, no new audit event, no FHIR/AI/
+  LangGraph call; unknown trace_id → fixed 404; a persistence failure →
+  fixed 500. `src/api/dependencies.py` was not changed — both routes
+  depend on existing dependency functions only. A new, explicit,
+  manually-run setup script (`scripts/setup_demo_client.py`) creates
+  the one canonical synthetic demo client
+  (`client_id=cli_demo_001`/`client_code=DEMO_HEALTH`/`client_name=
+  "Demo Health Plan"` — reusing the example `docs/database/
+  reference_data.md` §2 already documented but never loaded) —
+  idempotent (`ALREADY_PRESENT` only on an exact canonical-field match)
+  and conflict-safe (a differing existing row, or a `client_code`
+  collision under a different `client_id`, is reported as a `CONFLICT`
+  and never written to or overwritten); never run automatically by
+  FastAPI, Streamlit, or `src/db/reference_data.py`. Ordinary pytest:
+  **576 passed, 4 skipped, 0 failed.** No real SQL was run, no live
+  FHIR was called, no live AI was called. Streamlit itself remains
+  **NOT IMPLEMENTED**.
 - Alembic is initialized and in active use (see Fixed Technology
   Decisions and
   [ADR-005](docs/decisions/ADR-005-database-schema-migration-strategy.md)):

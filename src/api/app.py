@@ -34,12 +34,14 @@ from src.db.reference_data import workflow_definition_id
 from src.db.repository import AuditEventConflictError, AuditRepository, PersistenceError
 from src.integrations.fhir_client import FHIRStyleClient
 from src.models.api import CaseValidationRequest, CaseValidationResponse
+from src.models.human_review import HumanReviewRecord
 from src.models.human_review_api import (
     HumanReviewDecisionRequest,
     HumanReviewDecisionResponse,
 )
 from src.models.resume_api import ResumeWorkflowRequest, ResumeWorkflowResponse
 from src.models.workflow_api import StartWorkflowRequest, StartWorkflowResponse
+from src.models.workflow_snapshot_api import WorkflowSnapshotResponse
 from src.rules.completeness import evaluate_completeness
 from src.workflow.case_intake_service import start_new_case_workflow
 from src.workflow.human_review_service import (
@@ -529,3 +531,127 @@ def start_workflow_endpoint(
         workflow_run=workflow_run,
         audit_events=result.audit_events,
     )
+
+
+# =====================================================================
+# WORKFLOW SNAPSHOT LOOKUP ENDPOINT (Task 26B)
+# Purpose:
+# Read-only lookup of one existing workflow run's current durable
+# state, by trace_id -- the backend boundary a UI needs to re-fetch a
+# case's current status without re-submitting a mutating request
+# (fresh intake, a Human Review decision, or a resume) merely to see
+# what already happened.
+#
+# Why:
+# This endpoint calls only two already-existing, already-read-only
+# repository methods (AuditRepository.get_workflow_run(),
+# AuditRepository.list_audit_events()) -- the exact same reads the
+# three mutating endpoints above already perform on themselves after
+# their own write completes. No new repository method, no new service
+# function, and no write of any kind exists here: a GET never creates
+# a workflow_runs or audit_events row, never invokes LangGraph, never
+# calls FHIR or AI, and never resumes or claims anything.
+#
+# Important Notes:
+# - trace_id comes only from the URL path, exactly like the Resume
+#   endpoint above -- this endpoint can only report an EXISTING run; it
+#   never creates one.
+# - Error mapping: an unknown trace_id -> 404; a persistence failure
+#   -> 500 with a fixed, safe message. There is no 409 case for a pure
+#   read -- nothing here can conflict with another request.
+# =====================================================================
+@app.get(
+    "/workflows/{trace_id}",
+    response_model=WorkflowSnapshotResponse,
+)
+def get_workflow_snapshot(
+    trace_id: str,
+    workflow_repository: AuditRepository = Depends(get_workflow_repository),
+) -> WorkflowSnapshotResponse:
+    """
+    Reports the current durable workflow_run/audit_events state for one
+    existing trace_id. Read-only: never mutates, never invokes the
+    workflow, FHIR, or AI.
+    """
+    try:
+        workflow_run = workflow_repository.get_workflow_run(trace_id)
+    except PersistenceError as error:
+        raise HTTPException(
+            status_code=500,
+            detail="The workflow snapshot could not be retrieved.",
+        ) from error
+
+    if workflow_run is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No workflow run was found for this trace_id.",
+        )
+
+    try:
+        audit_events = workflow_repository.list_audit_events(trace_id)
+    except PersistenceError as error:
+        raise HTTPException(
+            status_code=500,
+            detail="The workflow snapshot could not be retrieved.",
+        ) from error
+
+    return WorkflowSnapshotResponse(
+        trace_id=trace_id,
+        case_id=workflow_run.case_id,
+        workflow_run=workflow_run,
+        audit_events=audit_events,
+    )
+
+
+# =====================================================================
+# PENDING HUMAN REVIEW LOOKUP ENDPOINT (Task 26B)
+# Purpose:
+# Read-only lookup of the pending Human Review (if any) for one
+# existing trace_id -- the backend boundary a UI needs to discover
+# review_id after a run reaches HUMAN_REVIEW_REQUIRED, so it can later
+# submit a decision through POST /human-review/decisions without any
+# direct repository/database access.
+#
+# Why:
+# Calls HumanReviewRepository.get_pending_review_by_trace_id()
+# unchanged -- that method already filters to only a genuinely pending
+# review (review_status_code REQUESTED or IN_PROGRESS; a COMPLETED or
+# CANCELLED review is never returned) and already resolves
+# deterministically (oldest requested_at_utc first) if more than one
+# row somehow matches. No repository change was needed or made.
+#
+# Important Notes:
+# - No pending review (none ever existed, or the only one present has
+#   already been decided/cancelled) -> 404 with a fixed message. A
+#   persistence failure -> 500 with a fixed, safe message.
+# - This endpoint never creates, updates, or cancels a review, and
+#   never generates a new audit event merely because it was called.
+# =====================================================================
+@app.get(
+    "/human-review/pending/{trace_id}",
+    response_model=HumanReviewRecord,
+)
+def get_pending_human_review(
+    trace_id: str,
+    human_review_repository: HumanReviewRepository = Depends(get_human_review_repository),
+) -> HumanReviewRecord:
+    """
+    Reports the pending Human Review (if any) for one existing
+    trace_id. Read-only: never mutates, never invokes the workflow,
+    FHIR, or AI.
+    """
+    try:
+        pending_review = human_review_repository.get_pending_review_by_trace_id(trace_id)
+    except HumanReviewPersistenceError as error:
+        raise HTTPException(
+            status_code=500,
+            detail="The pending Human Review could not be retrieved.",
+        ) from error
+
+    if pending_review is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No pending Human Review found for this trace_id.",
+        )
+
+    return pending_review

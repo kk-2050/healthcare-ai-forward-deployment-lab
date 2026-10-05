@@ -165,7 +165,22 @@ clinical approval or denial decisions — see
   local prototype/demo infrastructure only, never a production FHIR
   integration; supplies evidence only and makes no clinical approval/
   denial decision. **IMPLEMENTED AND VALIDATED — offline.**
-- pytest test suite (552 tests passing, 4 opt-in real-SQL-Server tests
+- Streamlit backend prework (Task 26B): two read-only HTTP endpoints —
+  `GET /workflows/{trace_id}` and `GET /human-review/pending/{trace_id}`
+  — let a future UI client re-fetch a run's durable state and discover
+  a pending review's `review_id` using only the existing FastAPI
+  boundary (no direct database/repository access). Both reuse existing
+  repository read methods unchanged (`AuditRepository.get_workflow_run()`/
+  `list_audit_events()`, `HumanReviewRepository.get_pending_review_by_trace_id()`)
+  and perform no write of any kind. A new, explicit, operator-run local
+  setup script (`scripts/setup_demo_client.py`) creates the one
+  canonical synthetic demo client (`cli_demo_001`/`DEMO_HEALTH`/"Demo
+  Health Plan") a local demo needs — idempotent and conflict-safe (an
+  existing non-matching row is reported as a conflict, never
+  overwritten), never run automatically by the application. **Streamlit
+  itself remains NOT IMPLEMENTED.** **IMPLEMENTED AND VALIDATED —
+  offline.**
+- pytest test suite (576 tests passing, 4 opt-in real-SQL-Server tests
   intentionally skipped by default, as of this update)
 - Architecture design artifacts (ADRs, architecture/security/
   requirements docs)
@@ -318,13 +333,22 @@ Phase 2 (production) would require.
 - Only 25 application tables (26 including `alembic_version`) of the
   canonical 36-table Phase 1 database design (see
   [docs/database/](docs/database/)) are physically built (Waves 1-2).
-  The application now exposes four HTTP endpoints: `POST
+  The application now exposes six HTTP endpoints: `POST
   /cases/validate` (deterministic validation only, non-persistent, does
   not start a workflow), `POST /workflows` (Task 25B — starts a
   brand-new workflow run for a fresh/safely-retried case), `POST
   /human-review/decisions` (records a Human Review decision for an
-  existing run), and `POST /workflows/{trace_id}/resume` (same-run/
-  same-trace continuation for an existing run).
+  existing run), `POST /workflows/{trace_id}/resume` (same-run/
+  same-trace continuation for an existing run), and two read-only
+  lookups added for the upcoming Streamlit UI (Task 26B): `GET
+  /workflows/{trace_id}` (re-fetches a run's current durable
+  `workflow_run`/`audit_events` state) and `GET
+  /human-review/pending/{trace_id}` (reports the pending Human Review,
+  if any, for a trace_id — never a `COMPLETED`/`CANCELLED` one). Both
+  GET endpoints are strictly read-only: they never mutate state, never
+  create an audit event, and never call FHIR, AI, or LangGraph.
+  **IMPLEMENTED AND VALIDATED — offline** (not yet proven against real
+  SQL Server).
 - `POST /workflows`'s fresh-intake/resume callers do not currently
   supply `step_code_to_workflow_step_id` to the orchestrator, so some
   audit events for these paths can have `workflow_step_id = NULL` — the
@@ -338,13 +362,18 @@ Phase 2 (production) would require.
   not implemented. The external Stage 1 requester notification/
   response transport remains planned, not implemented.
 - No Streamlit UI exists yet. Task 25B provides the fresh-workflow
-  FastAPI boundary (`POST /workflows`) that a future Streamlit UI will
-  use — the UI itself remains planned, not implemented, and no mocked
-  UI exists.
-- Task 25B is implemented and validated **offline** only — it has not
-  yet had its own opt-in real SQL Server integration proof (unlike
+  FastAPI boundary (`POST /workflows`), and Task 26B adds the two
+  read-only lookups a Streamlit UI needs (`GET /workflows/{trace_id}`,
+  `GET /human-review/pending/{trace_id}`) plus the local demo-client
+  setup script — the UI itself remains planned, not implemented, and
+  no mocked UI exists.
+- Task 25B/26B are implemented and validated **offline** only — neither
+  has yet had its own opt-in real SQL Server integration proof (unlike
   Tasks 23/24, which are both offline- and real-SQL-validated; see
-  Current Status above).
+  Current Status above). The demo-client setup script
+  (`scripts/setup_demo_client.py`) has likewise only been exercised
+  offline against an isolated SQLite double — it has not yet been run
+  against a real local SQL Server database.
 - No production authentication/authorization layer exists yet —
   reviewer identity is supplied directly by the caller.
 - Not evaluated for clinical, legal, or regulatory accuracy — it is a

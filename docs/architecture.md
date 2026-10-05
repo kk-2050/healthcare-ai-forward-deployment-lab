@@ -125,7 +125,11 @@ via `AuditRepository` — validated end to end against real SQL Server
 `POST /workflows` (Task 25B, a brand-new run), `POST
 /human-review/decisions` (Task 23C-7A), and `POST
 /workflows/{trace_id}/resume` (Task 24B-4C) — alongside the
-validation-only, non-persistent `POST /cases/validate`.
+validation-only, non-persistent `POST /cases/validate`. Two further
+endpoints (Task 26B) — `GET /workflows/{trace_id}` and `GET
+/human-review/pending/{trace_id}` — are read-only lookups that reuse
+existing repository read methods directly; they do not invoke the
+orchestrator, LangGraph, FHIR, or AI, and never mutate state.
 
 **Target Phase 1 design:** a canonical 36-table relational model
 (organizational masters, case/workflow persistence, deterministic
