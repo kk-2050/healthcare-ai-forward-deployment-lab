@@ -320,9 +320,42 @@ before, during, or after review.
   collision under a different `client_id`, is reported as a `CONFLICT`
   and never written to or overwritten); never run automatically by
   FastAPI, Streamlit, or `src/db/reference_data.py`. Ordinary pytest:
-  **576 passed, 4 skipped, 0 failed.** No real SQL was run, no live
-  FHIR was called, no live AI was called. Streamlit itself remains
-  **NOT IMPLEMENTED**.
+  **576 passed, 4 skipped, 0 failed**, at Task 26B's own closure (see
+  the Task 26C-1 bullet below for the current total). No real SQL was
+  run, no live FHIR was called, no live AI was called.
+- **Task 26C-1 (Streamlit MVP foundation): IMPLEMENTED AND VALIDATED —
+  offline.** `streamlit_app.py` is a thin HTTP/JSON client over
+  FastAPI only — it never imports LangGraph, a workflow service, a
+  repository, a SQLAlchemy session, `FHIRStyleClient`, the synthetic
+  FHIR runtime, or the AI provider; every action goes through
+  `src/ui/api_client.py` (`httpx`), the one place that boundary is
+  crossed. Three navigation areas exist: Client Requirement Intake
+  (explicitly **MOCKED / UI-ONLY** — `st.session_state` only, never
+  persisted, never sent to any backend, no invented endpoint), Healthcare
+  Case Processing (submits `src/ui/demo_data.py`'s canonical synthetic
+  demo case — `client_id=cli_demo_001` matching Task 26B's demo client,
+  `requested_service_code=SYN-LUMBAR-MRI`/`diagnosis_code=
+  SYN-LOW-BACK-PAIN` matching Task 25C's synthetic FHIR evidence — to
+  the real `POST /workflows`), and Audit & Technical View (renders only
+  the latest response snapshot already in session state — explicitly
+  not a durable lookup). `src/ui/view_helpers.py` renders only an
+  explicit field allowlist — never `final_state`, a raw FHIR/LLM field,
+  or any other unlisted key, even if the backend response happened to
+  contain one. `src/ui/api_client.py` maps every non-2xx response,
+  connection failure, and timeout to one fixed, safe message determined
+  **locally from the HTTP status code alone** (Task 26C-1B correction)
+  — the backend's own response body/`detail` text is never read or
+  displayed, so this boundary stays safe even if a future backend
+  implementation puts something unsafe there; never a raw exception,
+  response text, traceback, secret, connection string, or backend
+  internal. **Human Review decision submission, Resume,
+  and durable `GET` re-fetch are explicitly NOT built yet** (planned for
+  Task 26C-2). No backend file changed; `requirements.txt` was not
+  touched (`streamlit`/`httpx` were already pinned dependencies).
+  Ordinary pytest: **612 passed, 4 skipped, 0 failed.** No real SQL was
+  run, no live FHIR was called, no live AI was called. The Streamlit UI
+  has not yet been run as a live session against a real FastAPI/SQL
+  Server backend.
 - Alembic is initialized and in active use (see Fixed Technology
   Decisions and
   [ADR-005](docs/decisions/ADR-005-database-schema-migration-strategy.md)):
