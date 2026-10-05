@@ -259,11 +259,43 @@ before, during, or after review.
   decision. `case_repository` stays optional on the orchestrator's
   public signature for backward compatibility; the real production
   callers (fresh intake, resume) always supply it. Ordinary pytest:
-  525 passed, 4 skipped, 0 failed. **Not yet proven against real SQL
-  Server** (unlike Tasks 23/24, which are both offline- and real-SQL-
-  validated) — see the opt-in integration tests above. `FHIR_MODE` (a
-  synthetic runtime mode for normal local use) is explicitly deferred
-  to Task 25C; the Streamlit UI remains not implemented.
+  525 passed, 4 skipped, 0 failed, at Task 25B's own closure (see the
+  Task 25C bullet below for the current total). **Not yet proven
+  against real SQL Server** (unlike Tasks 23/24, which are both
+  offline- and real-SQL-validated) — see the opt-in integration tests
+  above. The Streamlit UI remains not implemented.
+- **Task 25C (synthetic FHIR runtime mode): IMPLEMENTED AND VALIDATED —
+  offline.** `FHIR_MODE` (`src/config/fhir_settings.py`) controls what,
+  if anything, `get_fhir_client()` (`src/api/dependencies.py`) builds:
+  `disabled` is the default for unset or blank `FHIR_MODE` and fails
+  closed exactly as before Task 25C. An unrecognized `FHIR_MODE` value
+  is rejected by configuration validation and is converted by
+  `get_fhir_client()` to the same fail-closed
+  `FHIRIntegrationNotConfiguredError` path — never normalized to
+  `disabled`, and never treated as `synthetic` or `live`. `synthetic`
+  (explicit opt-in)
+  returns a local, zero-network `FHIRStyleClient`
+  (`src/integrations/synthetic_fhir_runtime.py`, backed only by
+  `httpx.MockTransport` — no socket/DNS/TLS access is possible) that
+  returns one fixed, deterministic evidence Bundle
+  (`SYN-LUMBAR-MRI`/`SYN-LOW-BACK-PAIN`) for every case_id; `live`
+  remains explicitly **NOT IMPLEMENTED** and also fails closed — the
+  word is recognized but never builds a live/unauthenticated client.
+  `FHIRStyleClient` itself (`src/integrations/fhir_client.py`) is
+  unchanged. This is the one canonical dependency path — no route
+  builds a second FHIR client, and both `POST /workflows` and `POST
+  /workflows/{trace_id}/resume` already use it, so both now run
+  end-to-end locally under `FHIR_MODE=synthetic` through their real,
+  un-overridden dependency, not a test-only substitute. Phase 1 local
+  prototype/demo infrastructure only — never a production integration,
+  and it supplies evidence only, never a clinical approval/denial
+  decision. An approved, authenticated **live** production FHIR
+  integration remains **NOT IMPLEMENTED**. Every automated test
+  controls `FHIR_MODE` explicitly (never relies on a developer's local
+  `.env`); the two existing fail-closed API tests were updated to do
+  the same. Ordinary pytest: **552 passed, 4 skipped, 0 failed.** No
+  real SQL was run, no live FHIR was called, and no live AI was called
+  for Task 25C. The Streamlit UI remains **NOT IMPLEMENTED**.
 - Alembic is initialized and in active use (see Fixed Technology
   Decisions and
   [ADR-005](docs/decisions/ADR-005-database-schema-migration-strategy.md)):

@@ -353,3 +353,85 @@ complete; last updated after Task 24B-4G):
 
 No element of this contract should be read as already fully
 implemented merely because it is now an approved requirement.
+
+## 9. FHIR Runtime Mode (`FHIR_MODE`) and the Fail-Closed Boundary
+
+This section documents the explicit runtime-mode boundary added by
+Task 25C, which directly implements this project's own Universal
+Least-Privilege Escalation Boundary (§7) for the one integration this
+project has no approved, authenticated live contract for: FHIR-style
+healthcare data retrieval.
+
+**What `FHIR_MODE` controls:** `get_fhir_client()`
+(`src/api/dependencies.py`), by way of `FHIRRuntimeSettings`
+(`src/config/fhir_settings.py`), recognizes exactly three values —
+`disabled`, `synthetic`, `live` — normalized by stripping whitespace
+and lower-casing before comparison. Nothing else is read from this
+setting: no URL, API key, token, username/password, or OAuth/SMART
+configuration exists for it, and none may be added without a separate,
+explicitly approved integration contract.
+
+**`disabled` (the default for unset or blank `FHIR_MODE`):** fails
+closed. No FHIR client of any kind is constructed. Per "Not explicitly
+allowed = DENY" (§7), the absence of an explicit `FHIR_MODE=synthetic`
+opt-in is never read as permission to build anything. A real HTTP
+request against any endpoint that depends on `get_fhir_client()` and
+does not override that dependency receives a fixed, safe HTTP 503
+(`"Live FHIR-style integration is not available."`) before any
+outbound call is ever attempted.
+
+**Any unrecognized `FHIR_MODE` value** is rejected by configuration
+validation (a Pydantic `ValidationError`) and is converted by
+`get_fhir_client()` to the same fail-closed `FHIRIntegrationNotConfiguredError`
+path. It is never treated as `synthetic` or `live`, and never
+silently normalized to `disabled`'s default — a configuration mistake
+is reported by failing closed, not hidden by guessing.
+
+**`synthetic` (explicit opt-in):** returns a local, zero-network,
+synthetic-data-only `FHIRStyleClient`
+(`src/integrations/synthetic_fhir_runtime.py`). Its only transport is
+`httpx.MockTransport` — an in-process, synchronous handler with no
+socket, DNS, or TLS access of any kind, so there is no outbound
+network capability by construction, not merely by configuration. It
+returns one fixed, deterministic evidence Bundle (`ServiceRequest`
+`SYN-SR-001`/`SYN-LUMBAR-MRI`, `Condition` `SYN-COND-001`/
+`SYN-LOW-BACK-PAIN`) for every request — synthetic data only, no real
+PHI/PII, no clinical approval/denial field of any kind. This mode
+supplies evidence only; every actual decision (completeness,
+evidence-consistency, AI routing, Human Review) remains made entirely
+by this project's existing deterministic rules/AI/human-review layers,
+exactly as for a real FHIR response. This is Phase 1 local prototype/
+demo infrastructure only, intended for manual local testing and the
+upcoming Task 26 Streamlit UI (not yet implemented) — never a
+production integration.
+
+**`live`:** names a future, **NOT IMPLEMENTED** mode. Recognizing the
+word is deliberate (so the contract is forward-documented), but it
+fails closed exactly like `disabled` — no live or unauthenticated
+client is ever constructed for it. There is no automatic or implicit
+fallback from `live` to `synthetic`, or from an invalid value to
+`synthetic` or `disabled`; every one of those cases reaches the
+identical fail-closed outcome.
+
+**One canonical construction path:** `get_fhir_client()` is the only
+place in the application that builds a FHIR-style client. No route
+constructs its own client or applies route-specific FHIR logic; both
+`POST /workflows` and `POST /workflows/{trace_id}/resume` depend on
+this same function.
+
+**Implementation status:**
+
+IMPLEMENTED:
+- The FHIR-style client abstraction (`src/integrations/fhir_client.py`).
+- The fail-closed dependency boundary, including the explicit
+  `FHIR_MODE` setting.
+- The explicit local synthetic runtime (`FHIR_MODE=synthetic`).
+- The deterministic, zero-network synthetic transport.
+
+NOT IMPLEMENTED:
+- An approved, authenticated, live production FHIR integration.
+  `FHIR_MODE=live` remains a recognized-but-unbuilt mode that always
+  fails closed.
+
+This is a Phase 1 prototype security boundary, documented for what it
+actually does today — it is not a claim of production readiness.

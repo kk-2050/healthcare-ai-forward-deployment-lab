@@ -196,6 +196,46 @@ def client_with_engine():
         app.dependency_overrides.clear()
 
 
+@pytest.fixture()
+def client_with_synthetic_fhir_mode(monkeypatch):
+    """
+    Same as client_with_engine, except get_fhir_client is deliberately
+    LEFT UN-OVERRIDDEN and FHIR_MODE=synthetic is set explicitly via
+    monkeypatch (Task 25C) -- this proves the real, normal FastAPI
+    dependency path (not a test-only substitute) builds a working
+    synthetic client and the request completes through it. The
+    explicit monkeypatch.setenv() value is authoritative regardless of
+    a developer's local .env, because load_dotenv() defaults to
+    override=False.
+    """
+    monkeypatch.setenv("FHIR_MODE", "synthetic")
+
+    engine = make_test_engine()
+    create_database_schema(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql(_CLIENTS_TABLE_DDL)
+    session_factory = sessionmaker(bind=engine)
+    ai_provider = make_offline_ai_provider()
+
+    app.dependency_overrides[get_session_factory] = lambda: session_factory
+    app.dependency_overrides[get_workflow_repository] = lambda: AuditRepository(
+        session_factory=session_factory
+    )
+    app.dependency_overrides[get_human_review_repository] = lambda: HumanReviewRepository(
+        session_factory=session_factory
+    )
+    app.dependency_overrides[get_case_repository] = lambda: CaseRepository(
+        session_factory=session_factory
+    )
+    app.dependency_overrides[get_ai_provider] = lambda: ai_provider
+    # get_fhir_client is intentionally NOT overridden here.
+
+    try:
+        yield TestClient(app), engine
+    finally:
+        app.dependency_overrides.clear()
+
+
 def valid_start_payload(**overrides):
     data = {
         "client_id": _CLIENT_ID,
@@ -472,14 +512,26 @@ def test_orchestrator_failure_returns_fixed_500(client_with_engine, monkeypatch)
 # =====================================================================
 # FAIL-CLOSED FHIR DEPENDENCY TEST
 # =====================================================================
-def test_default_fhir_dependency_fails_closed_with_503():
+def test_default_fhir_dependency_fails_closed_with_503(monkeypatch):
     """
     Verifies that calling POST /workflows without overriding
     get_fhir_client returns the existing, already-registered HTTP 503
     -- proving this new endpoint is covered by the same global
     fail-closed handler the Resume endpoint already uses, with no new
     code required.
+
+    Environment isolation (Task 25C): FHIR_MODE now controls what the
+    real get_fhir_client() implementation does, so a developer's own
+    local .env (which could legitimately set FHIR_MODE=synthetic for
+    normal local use) must never affect this test. Removing any
+    existing value and neutralizing load_dotenv() guarantees this test
+    proves the disabled default deterministically.
     """
+    monkeypatch.delenv("FHIR_MODE", raising=False)
+    monkeypatch.setattr(
+        "src.api.dependencies.load_dotenv", lambda *args, **kwargs: None
+    )
+
     engine = make_test_engine()
     create_database_schema(engine)
     with engine.begin() as connection:
@@ -508,6 +560,36 @@ def test_default_fhir_dependency_fails_closed_with_503():
 
     assert response.status_code == 503
     assert response.json() == {"detail": "Live FHIR-style integration is not available."}
+
+
+# =====================================================================
+# SYNTHETIC FHIR RUNTIME MODE TEST (Task 25C)
+# Purpose:
+# Proves POST /workflows works through the REAL, un-overridden
+# get_fhir_client() dependency when FHIR_MODE=synthetic -- this is the
+# normal dependency path Task 26 Streamlit will rely on, not a
+# test-only substitute client.
+# =====================================================================
+def test_synthetic_fhir_mode_completes_through_real_dependency_path(
+    client_with_synthetic_fhir_mode,
+):
+    """
+    Verifies a fresh-case request completes successfully when
+    FHIR_MODE=synthetic and get_fhir_client is NOT overridden -- the
+    canonical demo case (SYN-LUMBAR-MRI / SYN-LOW-BACK-PAIN) matches
+    the synthetic runtime's own fixed evidence, so the run reaches an
+    ordinary COMPLETED/COMPLETE_WORKFLOW disposition, never Human
+    Review, through the real dependency -- not a mocked override.
+    """
+    client, engine = client_with_synthetic_fhir_mode
+    insert_client(engine)
+
+    response = client.post("/workflows", json=valid_start_payload())
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["workflow_run"]["workflow_status_code"] == "COMPLETED"
+    assert body["workflow_run"]["next_action_code"] == "COMPLETE_WORKFLOW"
 
 
 # =====================================================================

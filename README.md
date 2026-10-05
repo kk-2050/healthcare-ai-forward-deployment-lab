@@ -147,7 +147,25 @@ clinical approval or denial decisions — see
   `reason_category`. **IMPLEMENTED AND VALIDATED — offline** (see
   Current Limitations below for what has not yet been proven against
   real SQL Server).
-- pytest test suite (525 tests passing, 4 opt-in real-SQL-Server tests
+- Synthetic FHIR runtime mode (Task 25C): `FHIR_MODE=synthetic`
+  (`src/config/fhir_settings.py`) makes `get_fhir_client()`
+  (`src/api/dependencies.py`) return a local, zero-network, synthetic-
+  only `FHIRStyleClient` (`src/integrations/synthetic_fhir_runtime.py`,
+  backed entirely by `httpx.MockTransport` — no socket/DNS/TLS access
+  is possible) returning one deterministic synthetic evidence Bundle
+  (`SYN-LUMBAR-MRI`/`SYN-LOW-BACK-PAIN`). `FHIR_MODE=disabled` (unset,
+  blank, or any value other than `synthetic`/`live`) remains the
+  default and still fails closed with the existing fixed 503;
+  `FHIR_MODE=live` is explicitly **NOT IMPLEMENTED** and also fails
+  closed — recognizing the word never builds a live/unauthenticated
+  client. This is the one canonical dependency path both `POST
+  /workflows` and `POST /workflows/{trace_id}/resume` already use, so
+  both now run end to end locally under synthetic mode — the real path
+  Task 26 Streamlit will use, not a test-only substitute. Phase 1
+  local prototype/demo infrastructure only, never a production FHIR
+  integration; supplies evidence only and makes no clinical approval/
+  denial decision. **IMPLEMENTED AND VALIDATED — offline.**
+- pytest test suite (552 tests passing, 4 opt-in real-SQL-Server tests
   intentionally skipped by default, as of this update)
 - Architecture design artifacts (ADRs, architecture/security/
   requirements docs)
@@ -158,10 +176,9 @@ clinical approval or denial decisions — see
 - Wave 6 relational hardening (CHECK constraints, JSON validation,
   secondary indexes, composite FKs, `event_types` composite uniqueness,
   `workflow_runs` composite uniqueness)
-- A synthetic FHIR runtime mode for normal local FastAPI/Streamlit use
-  (`FHIR_MODE`, Task 25C) — today, a real HTTP request that does not
-  override the FHIR dependency always fails closed with a fixed 503
-  (see Current Limitations below)
+- An approved, authenticated **live** production FHIR integration
+  (`FHIR_MODE=live` remains explicitly not implemented and fails
+  closed — see Current Limitations below)
 - Stage 2 unresolved-missing-information escalation to Human Review
   (Stage 1's deterministic `REQUEST_MISSING_INFORMATION` routing is
   implemented)
@@ -269,18 +286,35 @@ Phase 2 (production) would require.
 
 - **FHIR integration boundary — IMPLEMENTED:** the FHIR-style client
   abstraction (`src/integrations/fhir_client.py`), the fail-closed
-  FastAPI dependency boundary (`src/api/dependencies.py`'s
-  `get_fhir_client()`), and offline mocked FHIR test paths
-  (`httpx.MockTransport`, never a live network call). **NOT YET
-  IMPLEMENTED:** an approved, authenticated, live production FHIR
-  integration, and a synthetic FHIR runtime mode for normal local
-  FastAPI/Streamlit use (planned as `FHIR_MODE`, Task 25C). Today, a
-  real HTTP request against any endpoint that depends on
-  `get_fhir_client()` (the Resume API and the fresh-case workflow-start
-  API) and does not override that dependency always fails closed with
-  a fixed HTTP 503 — see [docs/security.md](docs/security.md). A test
-  overriding this dependency with `httpx.MockTransport` is an offline
-  test double, never a normal runtime capability.
+  FastAPI dependency boundary with its explicit `FHIR_MODE` runtime
+  mode (`src/api/dependencies.py`'s `get_fhir_client()`,
+  `src/config/fhir_settings.py`), the explicit local synthetic runtime
+  (`src/integrations/synthetic_fhir_runtime.py`, Task 25C), and offline
+  mocked FHIR test paths (`httpx.MockTransport`, never a live network
+  call). **NOT YET IMPLEMENTED:** an approved, authenticated, live
+  production FHIR integration — `FHIR_MODE=live` is recognized but
+  always fails closed, exactly like the default. `FHIR_MODE=disabled`
+  is the default for unset or blank `FHIR_MODE` and fails closed. An
+  unrecognized `FHIR_MODE` value is rejected by configuration
+  validation and is converted by `get_fhir_client()` to the same
+  fail-closed `FHIRIntegrationNotConfiguredError` path — it is never
+  normalized to `disabled`, and never treated as `synthetic` or
+  `live`. Either way, a real HTTP request against any endpoint that
+  depends on `get_fhir_client()` (the fresh-case workflow-start API and
+  the Resume API) and does not explicitly set `FHIR_MODE=synthetic`
+  always fails closed with a fixed HTTP 503 — see
+  [docs/security.md](docs/security.md).
+  Setting `FHIR_MODE=synthetic` (e.g. in a local `.env`) returns a
+  working, zero-network, synthetic-only client for local prototype/
+  demo use — Phase 1 local infrastructure only, never a production
+  integration, and never a clinical decision-maker; it supplies one
+  fixed, deterministic evidence Bundle for every case, so a demo case
+  using different codes than the synthetic Bundle's own
+  (`SYN-LUMBAR-MRI`/`SYN-LOW-BACK-PAIN`) correctly routes to Human
+  Review via the existing, unmodified evidence-consistency check — not
+  a defect. A test overriding this dependency with `httpx.MockTransport`
+  remains a separate, test-only double, distinct from this runtime
+  mode.
 - Only 25 application tables (26 including `alembic_version`) of the
   canonical 36-table Phase 1 database design (see
   [docs/database/](docs/database/)) are physically built (Waves 1-2).
