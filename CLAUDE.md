@@ -348,11 +348,48 @@ before, during, or after review.
   displayed, so this boundary stays safe even if a future backend
   implementation puts something unsafe there; never a raw exception,
   response text, traceback, secret, connection string, or backend
-  internal. **Human Review decision submission, Resume,
-  and durable `GET` re-fetch are explicitly NOT built yet** (planned for
-  Task 26C-2). No backend file changed; `requirements.txt` was not
+  internal. No backend file changed; `requirements.txt` was not
   touched (`streamlit`/`httpx` were already pinned dependencies).
-  Ordinary pytest: **612 passed, 4 skipped, 0 failed.** No real SQL was
+  Ordinary pytest: **612 passed, 4 skipped, 0 failed**, at Task 26C-1's
+  own closure (see the Task 26C-2 bullet below for the current total).
+- **Task 26C-2 (Streamlit Human Review, Resume, durable refresh):
+  IMPLEMENTED AND VALIDATED — offline.** `src/ui/api_client.py` gained
+  four thin methods sharing the exact same hardened error mapping as
+  `start_workflow()` — `get_workflow()`/`get_pending_human_review()`
+  (`GET`, read-only, never mutate) and
+  `submit_human_review_decision()`/`resume_workflow()` (`POST`); all
+  five methods now route through one shared `_request()` helper.
+  Inside Healthcare Case Processing: when the last known
+  `workflow_status_code` is `HUMAN_REVIEW_REQUIRED`
+  (`src/ui/view_helpers.py`'s `is_human_review_pending_eligible()`), an
+  explicit "Load Pending Human Review" action discovers `review_id` via
+  `GET /human-review/pending/{trace_id}` — the operator never types a
+  review_id manually. The decision form offers only
+  `ALLOWED_HUMAN_REVIEW_OUTCOMES` — confirmed by test to equal
+  `HumanReviewOutcome`'s four real values exactly
+  (`CONTINUE_WORKFLOW`/`REQUEST_MORE_INFORMATION`/`ESCALATE`/
+  `CLOSE_CASE`) — with no approve/deny control, a fixed
+  `reviewer_actor_type_code=HUMAN_REVIEWER` (the real, already-loaded
+  `actor_types` row), and, only for `CLOSE_CASE`,
+  `CLOSE_CASE_REASON_CODES` — confirmed by test to equal
+  `human_review_service.py`'s own `_APPROVED_CLOSE_REASON_CODES`
+  exactly, with `close_reason_text` required only for
+  `CASE_CLOSE_OTHER` (`requires_close_reason_text()`). When the
+  resulting state is `PENDING_RESUME`
+  (`is_resume_eligible()`), a Resume action rebuilds the request from
+  the existing `current_case_request`'s `case`/
+  `completeness_requirements`/`ai_processing_requirements` (no
+  `client_id` — confirmed `ResumeWorkflowRequest` has none) and calls
+  `POST /workflows/{trace_id}/resume`; `is_same_trace()` refuses to
+  apply a response whose `trace_id` does not match the run being
+  continued. `normalize_to_workflow_response_shape()` lets
+  `extract_workflow_summary()`/`extract_audit_event_rows()` work
+  uniformly across all four response shapes (Start/Resume/Snapshot/
+  HumanReviewDecision). Audit & Technical View gained an explicit
+  "Refresh Workflow State" action calling
+  `GET /workflows/{trace_id}` — a durable backend re-fetch, never
+  triggered automatically on rerender. No backend file changed.
+  Ordinary pytest: **650 passed, 4 skipped, 0 failed.** No real SQL was
   run, no live FHIR was called, no live AI was called. The Streamlit UI
   has not yet been run as a live session against a real FastAPI/SQL
   Server backend.

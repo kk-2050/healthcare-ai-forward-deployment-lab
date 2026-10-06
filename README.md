@@ -201,11 +201,38 @@ clinical approval or denial decisions — see
   only the latest response snapshot already held in session state —
   not a durable lookup. Streamlit never imports LangGraph, a workflow
   service, a repository, a SQLAlchemy session, a FHIR client, or the AI
-  provider; every action goes through plain HTTP/JSON. **Human Review
-  decision submission, Resume, and durable `GET` re-fetch are explicitly
-  NOT built yet (planned for Task 26C-2).** **IMPLEMENTED AND
-  VALIDATED — offline.**
-- pytest test suite (612 tests passing, 4 opt-in real-SQL-Server tests
+  provider; every action goes through plain HTTP/JSON. **IMPLEMENTED
+  AND VALIDATED — offline.**
+- Streamlit Human Review, Resume, and durable refresh (Task 26C-2):
+  `src/ui/api_client.py` gained four thin methods —
+  `get_workflow()`/`get_pending_human_review()` (`GET`, read-only) and
+  `submit_human_review_decision()`/`resume_workflow()` (`POST`) — all
+  sharing the same hardened, locally-controlled error mapping as
+  `start_workflow()` (Task 26C-1B; backend response/`detail` text is
+  never read). Inside Healthcare Case Processing: when the last known
+  state is `HUMAN_REVIEW_REQUIRED`, an explicit "Load Pending Human
+  Review" action discovers `review_id` via
+  `GET /human-review/pending/{trace_id}` — **the operator never types a
+  review_id manually**; the decision form then offers only the four
+  real `HumanReviewOutcome` values (`CONTINUE_WORKFLOW`,
+  `REQUEST_MORE_INFORMATION`, `ESCALATE`, `CLOSE_CASE` — copied
+  verbatim from `src/models/human_review.py`; no approve/deny control
+  exists or could exist), a fixed `reviewer_actor_type_code=
+  HUMAN_REVIEWER` (the real, already-loaded `actor_types` value), and,
+  only for `CLOSE_CASE`, one of the six real `CASE_CLOSE_*` reason
+  codes (`CASE_CLOSE_OTHER` additionally requires explanatory text,
+  mirroring the backend's own validation). When the resulting state is
+  `PENDING_RESUME`, a Resume action rebuilds the request from the
+  original `case`/`completeness_requirements`/`ai_processing_requirements`
+  (no `client_id` — `ResumeWorkflowRequest` has none) and calls
+  `POST /workflows/{trace_id}/resume`; a returned `trace_id` that does
+  not match the one being continued is treated as unsafe and never
+  applied. Audit & Technical View gained an explicit "Refresh Workflow
+  State" action calling `GET /workflows/{trace_id}` — a **durable**
+  backend re-fetch, not merely the last in-session response — never
+  triggered automatically on rerender. **IMPLEMENTED AND VALIDATED —
+  offline.**
+- pytest test suite (650 tests passing, 4 opt-in real-SQL-Server tests
   intentionally skipped by default, as of this update)
 - Architecture design artifacts (ADRs, architecture/security/
   requirements docs)
@@ -224,10 +251,6 @@ clinical approval or denial decisions — see
   implemented)
 - Reviewer assignment and a reviewer UI (reviewer identity is currently
   supplied directly by the caller — no authentication layer exists yet)
-- Remaining Streamlit UX (Task 26C-2): pending Human Review discovery,
-  the Human Review decision UI, the Resume UI, and durable
-  `GET /workflows/{trace_id}` re-fetch — the application shell and the
-  fresh-case flow are implemented (see Current Status above)
 - Remaining end-to-end and productionization work — see
   [docs/production_roadmap.md](docs/production_roadmap.md)
 
@@ -389,25 +412,23 @@ Phase 2 (production) would require.
   unresolved-missing-information escalation to Human Review remains
   not implemented. The external Stage 1 requester notification/
   response transport remains planned, not implemented.
-- A first Streamlit UI slice exists (Task 26C-1): the application
-  shell, the mocked Requirement Intake page, and the fresh-case
-  `POST /workflows` flow with safe result/audit rendering. **The Human
-  Review decision UI, the Resume UI, and durable
-  `GET /workflows/{trace_id}` re-fetch are NOT yet implemented** —
-  Task 26B already added the two read-only backend lookups
-  (`GET /workflows/{trace_id}`, `GET /human-review/pending/{trace_id}`)
-  those UI pieces will use (Task 26C-2); the local demo-client setup
-  script is also already available. This is a working prototype UI,
-  not a complete one.
-- Task 25B/26B/26C-1 are implemented and validated **offline** only —
-  none has yet had its own opt-in real SQL Server integration proof
-  (unlike Tasks 23/24, which are both offline- and real-SQL-validated;
-  see Current Status above). The demo-client setup script
+- The Streamlit UI (Tasks 26C-1/26C-2) now covers the full backend-
+  supported flow: the application shell, the mocked Requirement Intake
+  page, the fresh-case `POST /workflows` flow, pending Human Review
+  discovery and decision submission, same-run/same-trace Resume, and a
+  durable `GET /workflows/{trace_id}` refresh — with safe result/audit
+  rendering throughout. This is a working prototype UI with no login/
+  RBAC, no dashboards/charts, and no production hardening — not a
+  complete production application.
+- Task 25B/26B/26C-1/26C-2 are implemented and validated **offline**
+  only — none has yet had its own opt-in real SQL Server integration
+  proof (unlike Tasks 23/24, which are both offline- and real-SQL-
+  validated; see Current Status above). The demo-client setup script
   (`scripts/setup_demo_client.py`) has likewise only been exercised
   offline against an isolated SQLite double — it has not yet been run
   against a real local SQL Server database, and the Streamlit UI has
-  not yet been exercised in a live session against a real running
-  FastAPI/SQL Server backend.
+  not yet been exercised in a live interactive session against a real
+  running FastAPI/SQL Server backend.
 - No production authentication/authorization layer exists yet —
   reviewer identity is supplied directly by the caller.
 - Not evaluated for clinical, legal, or regulatory accuracy — it is a

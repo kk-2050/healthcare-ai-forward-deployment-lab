@@ -218,3 +218,203 @@ def test_map_http_error_response_is_pure_function_of_status_code():
     guaranteeing backend detail can never influence it."""
     assert map_http_error_response(404) == "The requested resource was not found."
     assert map_http_error_response(999) == "The backend returned an unexpected error."
+
+
+# =====================================================================
+# GET /workflows/{trace_id} (Task 26C-2)
+# =====================================================================
+def test_get_workflow_uses_correct_method_and_path():
+    """Verify get_workflow() issues a GET to /workflows/{trace_id}."""
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["path"] = request.url.path
+        return httpx.Response(200, json={"trace_id": "t1", "case_id": "c1", "workflow_run": {}, "audit_events": []})
+
+    client = make_client(handler)
+    client.get_workflow("t1")
+
+    assert seen["method"] == "GET"
+    assert seen["path"] == "/workflows/t1"
+
+
+def test_get_workflow_returns_parsed_body():
+    expected_body = {
+        "trace_id": "t1", "case_id": "c1",
+        "workflow_run": {"workflow_status_code": "COMPLETED"}, "audit_events": [],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=expected_body)
+
+    client = make_client(handler)
+    assert client.get_workflow("t1") == expected_body
+
+
+def test_get_workflow_404_mapped_safely_and_ignores_detail():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"detail": _UNSAFE_SENTINEL})
+
+    client = make_client(handler)
+    with pytest.raises(APIClientError) as excinfo:
+        client.get_workflow("missing-trace")
+
+    assert excinfo.value.message == "The requested resource was not found."
+    assert _UNSAFE_SENTINEL not in excinfo.value.message
+
+
+def test_get_workflow_500_mapped_safely_and_ignores_detail():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"detail": _UNSAFE_SENTINEL})
+
+    client = make_client(handler)
+    with pytest.raises(APIClientError) as excinfo:
+        client.get_workflow("t1")
+
+    assert excinfo.value.message == "The backend could not complete the request."
+    assert _UNSAFE_SENTINEL not in excinfo.value.message
+
+
+# =====================================================================
+# GET /human-review/pending/{trace_id} (Task 26C-2)
+# =====================================================================
+def test_get_pending_human_review_uses_correct_method_and_path():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["path"] = request.url.path
+        return httpx.Response(200, json={"review_id": "r1"})
+
+    client = make_client(handler)
+    client.get_pending_human_review("t1")
+
+    assert seen["method"] == "GET"
+    assert seen["path"] == "/human-review/pending/t1"
+
+
+def test_get_pending_human_review_returns_parsed_body():
+    expected_body = {"review_id": "r1", "trace_id": "t1", "case_id": "c1", "review_status_code": "REQUESTED"}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=expected_body)
+
+    client = make_client(handler)
+    assert client.get_pending_human_review("t1") == expected_body
+
+
+def test_get_pending_human_review_404_mapped_safely_and_ignores_detail():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"detail": _UNSAFE_SENTINEL})
+
+    client = make_client(handler)
+    with pytest.raises(APIClientError) as excinfo:
+        client.get_pending_human_review("t1")
+
+    assert excinfo.value.message == "The requested resource was not found."
+    assert _UNSAFE_SENTINEL not in excinfo.value.message
+
+
+def test_get_pending_human_review_500_mapped_safely_and_ignores_detail():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"detail": _UNSAFE_SENTINEL})
+
+    client = make_client(handler)
+    with pytest.raises(APIClientError) as excinfo:
+        client.get_pending_human_review("t1")
+
+    assert excinfo.value.message == "The backend could not complete the request."
+    assert _UNSAFE_SENTINEL not in excinfo.value.message
+
+
+# =====================================================================
+# POST /human-review/decisions (Task 26C-2)
+# =====================================================================
+def test_submit_human_review_decision_uses_correct_method_path_and_body():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        seen["method"] = request.method
+        seen["path"] = request.url.path
+        seen["json"] = json.loads(request.content)
+        return httpx.Response(200, json={"review": {}, "workflow_run": {}, "audit_events": []})
+
+    client = make_client(handler)
+    payload = {"review_id": "r1", "review_outcome_code": "CONTINUE_WORKFLOW"}
+    client.submit_human_review_decision(payload)
+
+    assert seen["method"] == "POST"
+    assert seen["path"] == "/human-review/decisions"
+    assert seen["json"] == payload
+
+
+def test_submit_human_review_decision_returns_parsed_body():
+    expected_body = {"review": {"review_id": "r1"}, "workflow_run": {}, "audit_events": []}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=expected_body)
+
+    client = make_client(handler)
+    assert client.submit_human_review_decision({}) == expected_body
+
+
+@pytest.mark.parametrize("status_code", [422, 404, 409, 500])
+def test_submit_human_review_decision_errors_mapped_safely_and_ignore_detail(status_code):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status_code, json={"detail": _UNSAFE_SENTINEL})
+
+    client = make_client(handler)
+    with pytest.raises(APIClientError) as excinfo:
+        client.submit_human_review_decision({})
+
+    assert excinfo.value.status_code == status_code
+    assert _UNSAFE_SENTINEL not in excinfo.value.message
+
+
+# =====================================================================
+# POST /workflows/{trace_id}/resume (Task 26C-2)
+# =====================================================================
+def test_resume_workflow_uses_correct_method_path_and_body():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        seen["method"] = request.method
+        seen["path"] = request.url.path
+        seen["json"] = json.loads(request.content)
+        return httpx.Response(200, json={"trace_id": "t1", "case_id": "c1", "workflow_run": {}, "audit_events": []})
+
+    client = make_client(handler)
+    payload = {"case": {"case_id": "c1"}, "completeness_requirements": {}, "ai_processing_requirements": {}}
+    client.resume_workflow("t1", payload)
+
+    assert seen["method"] == "POST"
+    assert seen["path"] == "/workflows/t1/resume"
+    assert seen["json"] == payload
+
+
+def test_resume_workflow_returns_parsed_body():
+    expected_body = {"trace_id": "t1", "case_id": "c1", "workflow_run": {}, "audit_events": []}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=expected_body)
+
+    client = make_client(handler)
+    assert client.resume_workflow("t1", {}) == expected_body
+
+
+@pytest.mark.parametrize("status_code", [404, 409, 500, 503])
+def test_resume_workflow_errors_mapped_safely_and_ignore_detail(status_code):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status_code, json={"detail": _UNSAFE_SENTINEL})
+
+    client = make_client(handler)
+    with pytest.raises(APIClientError) as excinfo:
+        client.resume_workflow("t1", {})
+
+    assert excinfo.value.status_code == status_code
+    assert _UNSAFE_SENTINEL not in excinfo.value.message

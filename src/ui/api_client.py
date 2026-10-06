@@ -101,31 +101,54 @@ def map_http_error_response(status_code: int) -> str:
 #   no authentication, no token, no header beyond ordinary JSON
 #   content negotiation (see src/ui/api_client.py's module docstring
 #   for why no auth exists in Phase 1).
-# - Designed so Task 26C-2 can cleanly add get_workflow_snapshot(),
-#   get_pending_human_review(), submit_human_review_decision(), and
-#   resume_workflow() as additional thin methods following this exact
-#   same pattern -- not implemented yet, since Task 26C-1 only needs
-#   start_workflow().
+# - Every public method is a thin wrapper around the one shared
+#   _request() helper below -- each sends exactly one HTTP call and
+#   returns the parsed JSON body on success (any 2xx), or raises
+#   APIClientError on anything else. None of these methods inspects or
+#   depends on another method's result; the caller (streamlit_app.py)
+#   owns all sequencing/eligibility decisions.
 # =====================================================================
 class APIClient:
     def __init__(self, base_url: str, *, timeout: float = _DEFAULT_TIMEOUT_SECONDS):
         self._client = httpx.Client(base_url=base_url, timeout=timeout)
 
     def start_workflow(self, payload: dict) -> dict:
-        """
-        Calls POST /workflows with the given JSON-serializable payload
-        and returns the parsed response body (shaped like
-        StartWorkflowResponse) on success (HTTP 201).
+        """Calls POST /workflows -- starts a brand-new workflow run.
+        Returns the parsed response body (StartWorkflowResponse shape)
+        on success (HTTP 201)."""
+        return self._request("POST", "/workflows", json=payload)
 
-        Raises APIClientError with a safe message for any non-2xx
-        response, connection failure, or timeout -- never raises a raw
-        httpx exception to the caller.
-        """
-        return self._post("/workflows", payload)
+    def get_workflow(self, trace_id: str) -> dict:
+        """Calls GET /workflows/{trace_id} -- a read-only, durable
+        re-fetch of one run's current workflow_run/audit_events state
+        (WorkflowSnapshotResponse shape). Never mutates anything."""
+        return self._request("GET", f"/workflows/{trace_id}")
 
-    def _post(self, path: str, payload: dict) -> dict:
+    def get_pending_human_review(self, trace_id: str) -> dict:
+        """Calls GET /human-review/pending/{trace_id} -- a read-only
+        lookup of the pending Human Review (if any) for one trace_id
+        (HumanReviewRecord shape, returned directly). Never mutates
+        anything, never fabricates a review_id."""
+        return self._request("GET", f"/human-review/pending/{trace_id}")
+
+    def submit_human_review_decision(self, payload: dict) -> dict:
+        """Calls POST /human-review/decisions with a
+        HumanReviewDecisionRequest-shaped payload. Returns the parsed
+        response body (HumanReviewDecisionResponse shape) on success
+        (HTTP 200)."""
+        return self._request("POST", "/human-review/decisions", json=payload)
+
+    def resume_workflow(self, trace_id: str, payload: dict) -> dict:
+        """Calls POST /workflows/{trace_id}/resume with a
+        ResumeWorkflowRequest-shaped payload. Returns the parsed
+        response body (ResumeWorkflowResponse shape) on success
+        (HTTP 200). trace_id always comes from the URL path, exactly
+        as the backend contract requires -- never from the body."""
+        return self._request("POST", f"/workflows/{trace_id}/resume", json=payload)
+
+    def _request(self, method: str, path: str, *, json: dict | None = None) -> dict:
         try:
-            response = self._client.post(path, json=payload)
+            response = self._client.request(method, path, json=json)
         except httpx.TimeoutException as error:
             raise APIClientError(_TIMEOUT_MESSAGE) from error
         except httpx.RequestError as error:
