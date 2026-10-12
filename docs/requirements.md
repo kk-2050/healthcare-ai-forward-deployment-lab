@@ -332,7 +332,7 @@ actual files, unless such a file already exists in the repository.
 | BR-002, BR-005 | FR-27 | TR-018 | Retry-policy component (LLM adapter / FHIR-style integration client) | TEST-014 | failure classification (retryable/non-retryable), retry outcome/exhaustion — exact canonical audit/reference-data mapping pending state/catalog design | PLANNED |
 | BR-003, BR-004 | FR-28 | TR-019 | Security-policy enforcement gate | TEST-015 | security-policy DENY/block evidence — exact canonical audit/reference-data mapping pending state/catalog design | PLANNED |
 | BR-004 | FR-8, FR-9 | TR-009, TR-012 | SQL persistence layer; audit service | TEST-010 | (all events in §12.1 Audit Event Vocabulary) | PLANNED |
-| BR-006 | FR-10, FR-25 | TR-002, TR-013 | Streamlit UI | TEST-011 | n/a (status display only) | PLANNED |
+| BR-006 | FR-10, FR-25 | TR-002, TR-013 | Streamlit UI | TEST-011 | n/a (status display only) | IMPLEMENTED AND VALIDATED — offline and live locally (Task 26D) |
 | BR-005 | FR-5 | TR-003, TR-004 | Deterministic validation service; LangGraph routing node (constraint enforcement, not a separate build item) | TEST-012 | n/a (verified via AC-012) | PLANNED |
 
 ### 12.1 Audit Event Vocabulary

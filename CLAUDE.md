@@ -90,6 +90,13 @@ Full detail: [docs/architecture.md](docs/architecture.md).
   [.env.example](.env.example) and
   [config/settings.example.yaml](config/settings.example.yaml).
 - Never commit real secrets, even temporarily.
+- When inspecting configuration, read it only through this project's
+  existing validated settings loaders (e.g. `load_database_settings()`,
+  `load_azure_openai_settings()`, `load_fhir_runtime_settings()`) or by
+  checking boolean/presence of an expected environment-variable name —
+  never by directly opening, reading, or searching (`grep`/`cat`/etc.)
+  a `.env` file's contents. This applies to AI-assisted sessions as
+  much as to a human operator.
 - Never use real PHI/PII or real patient/healthcare identifiers —
   synthetic data only.
 - Externalize business-sensitive values (thresholds, retry limits,
@@ -390,9 +397,32 @@ before, during, or after review.
   `GET /workflows/{trace_id}` — a durable backend re-fetch, never
   triggered automatically on rerender. No backend file changed.
   Ordinary pytest: **650 passed, 4 skipped, 0 failed.** No real SQL was
-  run, no live FHIR was called, no live AI was called. The Streamlit UI
-  has not yet been run as a live session against a real FastAPI/SQL
-  Server backend.
+  run, no live FHIR was called, no live AI was called at Task 26C-2's
+  own closure. **The Streamlit UI has since been run as a live session
+  against a real FastAPI/SQL Server backend — see the Task 26D bullet
+  below.**
+- **Task 26D (live local end-to-end validation): LIVE LOCAL
+  VALIDATION COMPLETED.** A real local FastAPI process
+  (`FHIR_MODE=synthetic`) and a real local Streamlit process were run
+  together against the real local SQL Server database. The full flow
+  — fresh case submission, deterministic diagnosis-mismatch routing to
+  Human Review (no AI call), pending-review discovery, a
+  `CONTINUE_WORKFLOW` decision, `PENDING_RESUME`, same-run/same-trace
+  Resume (application-level re-invocation of the same compiled
+  LangGraph graph on the same `trace_id` — never LangGraph checkpoint
+  restoration; no checkpointer exists in this project),
+  `WORKFLOW_RESUMED` persistence, the unchanged diagnosis mismatch
+  being deterministically re-evaluated and correctly returning the
+  resumed workflow to `HUMAN_REVIEW_REQUIRED`, and a durable `GET
+  /workflows/{trace_id}` refresh — was exercised live and
+  independently verified by direct, read-only SQL Server queries. No
+  live FHIR call and no live AI call occurred — `FHIR_MODE=synthetic`
+  was used throughout (zero-network by construction), and the
+  validated scenario required no AI step. This is **CONFIGURATION/PATH
+  EVIDENCE**, not network-capture evidence (no packet/network capture
+  was performed). This validates the local prototype flow only — not
+  production readiness, not a live/production FHIR integration, not
+  live AI validation, and not an authentication/authorization claim.
 - Alembic is initialized and in active use (see Fixed Technology
   Decisions and
   [ADR-005](docs/decisions/ADR-005-database-schema-migration-strategy.md)):

@@ -45,6 +45,20 @@ Author: K.Kashiwagi
 committed, it must be treated as compromised: rotate/revoke it and
 scrub it from history, not just delete it in a new commit.
 
+**Application runtime access vs. AI-assisted inspection.** The
+application itself reads configuration only through its own validated
+settings loaders (e.g. `load_database_settings()`,
+`load_azure_openai_settings()`, `load_fhir_runtime_settings()`), which
+validate shape/presence; settings loaders must not log or expose
+the secret values they load. The same boundary applies when an AI
+coding assistant inspects this project: it must never directly
+open, read, grep, or otherwise search a `.env`
+file's contents, and must never print, display, or otherwise expose a
+credential, token, key, or connection string — including in command
+output, logs, or reports. Checking whether an expected
+environment-variable name is present (a boolean) is safe; reading its
+value is not.
+
 ## 3. Configuration vs. Hard-Coding
 
 Ordinary technical constants (e.g., HTTP status codes, retry backoff
@@ -402,8 +416,8 @@ evidence-consistency, AI routing, Human Review) remains made entirely
 by this project's existing deterministic rules/AI/human-review layers,
 exactly as for a real FHIR response. This is Phase 1 local prototype/
 demo infrastructure only, intended for manual local testing and the
-upcoming Task 26 Streamlit UI (not yet implemented) — never a
-production integration.
+Task 26 Streamlit UI — implemented and live-validated end-to-end
+(Tasks 26C/26D) — never a production integration.
 
 **`live`:** names a future, **NOT IMPLEMENTED** mode. Recognizing the
 word is deliberate (so the contract is forward-documented), but it

@@ -144,9 +144,9 @@ clinical approval or denial decisions — see
   Human Review `CLOSE_CASE` decision — covering both a direct run and a
   same-run/same-trace resumed run. Returns HTTP 201 and never exposes
   raw `final_state`/FHIR/AI content or the internal conflict
-  `reason_category`. **IMPLEMENTED AND VALIDATED — offline** (see
-  Current Limitations below for what has not yet been proven against
-  real SQL Server).
+  `reason_category`. **IMPLEMENTED AND VALIDATED — offline, and
+  live-exercised against the real local SQL Server database
+  (Task 26D)**.
 - Synthetic FHIR runtime mode (Task 25C): `FHIR_MODE=synthetic`
   (`src/config/fhir_settings.py`) makes `get_fhir_client()`
   (`src/api/dependencies.py`) return a local, zero-network, synthetic-
@@ -164,7 +164,10 @@ clinical approval or denial decisions — see
   Task 26 Streamlit will use, not a test-only substitute. Phase 1
   local prototype/demo infrastructure only, never a production FHIR
   integration; supplies evidence only and makes no clinical approval/
-  denial decision. **IMPLEMENTED AND VALIDATED — offline.**
+  denial decision. **IMPLEMENTED AND VALIDATED — offline, and
+  exercised in a real running local FastAPI process during Task 26D's
+  live validation** (synthetic mode remains zero-network by
+  construction — this is not a live-FHIR claim).
 - Streamlit backend prework (Task 26B): two read-only HTTP endpoints —
   `GET /workflows/{trace_id}` and `GET /human-review/pending/{trace_id}`
   — let a future UI client re-fetch a run's durable state and discover
@@ -177,8 +180,12 @@ clinical approval or denial decisions — see
   canonical synthetic demo client (`cli_demo_001`/`DEMO_HEALTH`/"Demo
   Health Plan") a local demo needs — idempotent and conflict-safe (an
   existing non-matching row is reported as a conflict, never
-  overwritten), never run automatically by the application. **IMPLEMENTED
-  AND VALIDATED — offline.**
+  overwritten), never run automatically by the application.
+  **IMPLEMENTED AND VALIDATED — offline, and live-exercised against
+  the real local SQL Server database (Task 26D)**: the setup script
+  created the real canonical demo client (`INSERTED`, verified by
+  read-only SQL), and both read-only endpoints were called live by
+  Streamlit.
 - Streamlit MVP foundation (Task 26C-1): `streamlit_app.py` — a thin
   HTTP/JSON client over FastAPI (`src/ui/api_client.py`, `httpx`) with
   three navigation areas (Client Requirement Intake, Healthcare Case
@@ -202,7 +209,8 @@ clinical approval or denial decisions — see
   not a durable lookup. Streamlit never imports LangGraph, a workflow
   service, a repository, a SQLAlchemy session, a FHIR client, or the AI
   provider; every action goes through plain HTTP/JSON. **IMPLEMENTED
-  AND VALIDATED — offline.**
+  AND VALIDATED — offline, and live-validated end-to-end against a
+  real local FastAPI/SQL Server backend (Task 26D)**.
 - Streamlit Human Review, Resume, and durable refresh (Task 26C-2):
   `src/ui/api_client.py` gained four thin methods —
   `get_workflow()`/`get_pending_human_review()` (`GET`, read-only) and
@@ -231,7 +239,9 @@ clinical approval or denial decisions — see
   State" action calling `GET /workflows/{trace_id}` — a **durable**
   backend re-fetch, not merely the last in-session response — never
   triggered automatically on rerender. **IMPLEMENTED AND VALIDATED —
-  offline.**
+  offline, and live-validated end-to-end (Task 26D)**: pending-review
+  discovery, the `CONTINUE_WORKFLOW` decision, same-trace Resume, and
+  durable refresh all succeeded live against real SQL Server.
 - pytest test suite (650 tests passing, 4 opt-in real-SQL-Server tests
   intentionally skipped by default, as of this update)
 - Architecture design artifacts (ADRs, architecture/security/
@@ -398,8 +408,8 @@ Phase 2 (production) would require.
   if any, for a trace_id — never a `COMPLETED`/`CANCELLED` one). Both
   GET endpoints are strictly read-only: they never mutate state, never
   create an audit event, and never call FHIR, AI, or LangGraph.
-  **IMPLEMENTED AND VALIDATED — offline** (not yet proven against real
-  SQL Server).
+  **IMPLEMENTED AND VALIDATED — offline, and live-validated against
+  real SQL Server (Task 26D)**.
 - `POST /workflows`'s fresh-intake/resume callers do not currently
   supply `step_code_to_workflow_step_id` to the orchestrator, so some
   audit events for these paths can have `workflow_step_id = NULL` — the
@@ -420,15 +430,31 @@ Phase 2 (production) would require.
   rendering throughout. This is a working prototype UI with no login/
   RBAC, no dashboards/charts, and no production hardening — not a
   complete production application.
-- Task 25B/26B/26C-1/26C-2 are implemented and validated **offline**
-  only — none has yet had its own opt-in real SQL Server integration
-  proof (unlike Tasks 23/24, which are both offline- and real-SQL-
-  validated; see Current Status above). The demo-client setup script
-  (`scripts/setup_demo_client.py`) has likewise only been exercised
-  offline against an isolated SQLite double — it has not yet been run
-  against a real local SQL Server database, and the Streamlit UI has
-  not yet been exercised in a live interactive session against a real
-  running FastAPI/SQL Server backend.
+- **Task 26D (live local end-to-end validation): LIVE LOCAL
+  VALIDATION COMPLETED.** A real local FastAPI process
+  (`FHIR_MODE=synthetic`) and a real local Streamlit process were run
+  together against the real local SQL Server database. The full flow
+  — fresh case submission, deterministic diagnosis-mismatch routing to
+  Human Review (no AI call), pending-review discovery, a
+  `CONTINUE_WORKFLOW` decision, `PENDING_RESUME`, same-run/same-trace
+  Resume (application-level re-invocation of the same compiled
+  LangGraph graph on the same `trace_id` — never LangGraph checkpoint
+  restoration; no checkpointer exists in this project),
+  `WORKFLOW_RESUMED` persistence, the unchanged diagnosis mismatch
+  being deterministically re-evaluated and correctly returning the
+  resumed workflow to `HUMAN_REVIEW_REQUIRED`, and a durable `GET
+  /workflows/{trace_id}` refresh — was exercised live and
+  independently verified by direct, read-only SQL Server queries
+  (case/workflow/human-review/audit persistence all confirmed). No
+  live FHIR call and no live AI call occurred during this validation —
+  `FHIR_MODE=synthetic` was used throughout (zero-network by
+  construction), and the validated scenario required no AI step. This
+  is **CONFIGURATION/PATH EVIDENCE**, not network-capture evidence (no
+  packet/network capture was performed). This validates the local
+  prototype flow only — it is not a production-readiness claim, not a
+  live/production FHIR integration claim, not a live AI validation
+  claim, and not an authentication/authorization claim; it does not
+  change any NOT-IMPLEMENTED item elsewhere in this document.
 - No production authentication/authorization layer exists yet —
   reviewer identity is supplied directly by the caller.
 - Not evaluated for clinical, legal, or regulatory accuracy — it is a

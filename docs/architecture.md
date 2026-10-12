@@ -206,9 +206,10 @@ orchestration boundary for an existing run's Human Review decision and
 same-run/same-trace resume, respectively (Tasks 23C-7A/24B-4C).
 **`POST /workflows` (Task 25B, `src/workflow/case_intake_service.py`)
 starts a brand-new orchestration run for a fresh/safely-retried case**
-— implemented and validated offline (not yet proven against real SQL
-Server). That fresh-intake path, and the resume path above, do not
-currently supply `step_code_to_workflow_step_id` to the orchestrator,
+— implemented and validated offline, and live-exercised against the
+real local SQL Server database (Task 26D). That fresh-intake path,
+and the resume path above, do not currently supply
+`step_code_to_workflow_step_id` to the orchestrator,
 so some of their audit events have `workflow_step_id = NULL` — the
 `workflow_definition_steps` catalog itself remains fully loaded; this
 is a current Phase 1 audit-enrichment limitation, not missing
