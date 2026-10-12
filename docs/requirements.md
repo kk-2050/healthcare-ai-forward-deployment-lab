@@ -297,44 +297,64 @@ Status values used below follow the README's existing convention:
 conceptual implementation target, test ID, and audit event, but no
 code has been written yet (see
 [README.md — Current Project Status](../README.md#4-current-project-status)).
-This matrix has not been re-walked row-by-row since Task 22, so most
-rows below still show PLANNED even though real code now exists behind
-parts of them — see
+
+The Planned Audit Event entries in this matrix are conceptual event
+names, not necessarily the literal codes in the implemented
+`event_types` catalog. See
+[database/reference_data.md](database/reference_data.md) for the
+authoritative implemented event vocabulary.
+
+This matrix has not been fully re-walked row-by-row since Task 22, so
+some rows may still understate real implementation — see
 [README.md — Current Project Status](../README.md#4-current-project-status)
-for the authoritative, currently accurate implementation status. Three
-rows have been updated to reflect Tasks 23/24/25B, now complete: the
-BR-003 row (`HUMAN_REVIEW_REQUIRED` persistence, including the real
-`human_reviews` row created atomically with it) and the BR-003/BR-004
-resume row (FR-23/FR-24/FR-7, TR-010/TR-011 — same-run/same-trace
-resume, `resume_workflow()`, `WORKFLOW_RESUMED`), both
-**IMPLEMENTED AND VALIDATED**, offline and against the real local SQL
-Server database; and the BR-001 row (FR-1/FR-2, TR-001/TR-002 — fresh
-case intake, `POST /workflows`, `start_new_case_workflow()`), now
-**IMPLEMENTED AND VALIDATED — offline, and live-exercised against the
-real local SQL Server database (Task 26D)**. Real code also exists
-behind part of the BR-004/
-FR-8/FR-9 row (`src/workflow/orchestrator.py` persists workflow
-transitions and audit events to SQL Server), not yet updated here.
+for the authoritative, currently accurate implementation status. The
+BR-003 and BR-003/BR-004 resume rows reflect Tasks 23/24; the BR-001
+row was corrected in Task 26F (its underlying capability from Task
+25B); and the BR-006 row was corrected in Task 26E. Those corrections
+are preserved below.
+
+**Task 26G corrections** (evidence-verified against real source code
+and existing named tests, e.g. `tests/test_workflow_graph.py`,
+`tests/test_ai_routing.py`, `src/models/ai.py`,
+`src/models/human_review.py` — no test was rerun; the known baseline
+remains 650 passed, 4 skipped, 0 failed): deterministic Stage 1
+missing-information handling, deterministic AI-routing, the
+approved-task-type/structured-output AI contract, malformed-AI-output
+handling, AI provider-failure handling, and FHIR/healthcare
+integration-failure handling are now **IMPLEMENTED AND VALIDATED —
+offline**. Stage 2 unresolved-missing-information escalation to Human
+Review remains **NOT IMPLEMENTED** — its row is marked PARTIALLY
+IMPLEMENTED to keep Stage 1 and Stage 2 distinct. The SQL
+persistence/audit-service row is now **IMPLEMENTED AND VALIDATED —
+offline and live locally (Task 26D)**. The no-autonomous-clinical-
+decision row (FR-5) distinguishes its two kinds of evidence: the UI
+guarantee has a dedicated passing test
+(`tests/test_streamlit_app.py::test_no_approve_deny_control_exists_anywhere_on_the_page`);
+the backend guarantee is the closed four-value `HumanReviewOutcome`
+enum and its typed request model, confirmed by code inspection only —
+no dedicated backend negative test was found, and this is not a claim
+of complete validation of every backend security boundary.
+
 "Planned Implementation" entries name conceptual components, not
 actual files, unless such a file already exists in the repository.
 
 | Business Req | Functional Req | Technical Req | Planned Implementation | Planned Test | Planned Audit Event | Status |
 |---|---|---|---|---|---|---|
 | BR-001 | FR-1, FR-2 | TR-001, TR-002 | Pydantic case model; FastAPI request handler (`POST /workflows`, `src/models/workflow_api.py`, `src/workflow/case_intake_service.py`) | TEST-001 (offline; `tests/test_api_workflow_start.py`, `tests/test_case_intake_service.py`) | case_received, validation_completed (`WORKFLOW_STARTED`) | IMPLEMENTED AND VALIDATED — offline, and live-exercised against real local SQL Server (Task 26D) |
-| BR-001, BR-002 | FR-12, FR-13 | TR-003 | Deterministic validation service | TEST-002 | missing_information_detected | PLANNED |
-| BR-005 | FR-3, FR-14, FR-15 | TR-003, TR-004 | Deterministic validation service; LangGraph routing node | TEST-003 | business_rules_completed | PLANNED |
-| BR-005 | FR-4, FR-16, FR-17 | TR-005, TR-006 | Azure LLM adapter | TEST-004 | llm_requested | PLANNED |
-| BR-005 | FR-18, FR-19 | TR-005 | Azure LLM adapter | TEST-005 | llm_output_validation_failed | PLANNED |
-| BR-005 | FR-20 | TR-007 | Azure LLM adapter | TEST-006 | llm_call_failed | PLANNED |
-| BR-002 | FR-21 | TR-008 | Healthcare/FHIR-style API adapter | TEST-007 | healthcare_api_failed | PLANNED |
+| BR-001, BR-002 | FR-12, FR-13 | TR-003 | Deterministic validation service | TEST-002 | missing_information_detected | IMPLEMENTED AND VALIDATED — offline (Stage 1 only) |
+| BR-005 | FR-3, FR-14, FR-15 | TR-003, TR-004 | Deterministic validation service; LangGraph routing node | TEST-003 | business_rules_completed | IMPLEMENTED AND VALIDATED — offline |
+| BR-005 | FR-4, FR-16, FR-17 | TR-005, TR-006 | Azure LLM adapter | TEST-004 | llm_requested | IMPLEMENTED AND VALIDATED — offline |
+| BR-005 | FR-18, FR-19 | TR-005 | Azure LLM adapter | TEST-005 | llm_output_validation_failed | IMPLEMENTED AND VALIDATED — offline |
+| BR-005 | FR-20 | TR-007 | Azure LLM adapter | TEST-006 | llm_call_failed | IMPLEMENTED AND VALIDATED — offline |
+| BR-002 | FR-21 | TR-008 | Healthcare/FHIR-style API adapter | TEST-007 | healthcare_api_failed | IMPLEMENTED AND VALIDATED — offline |
 | BR-003 | FR-6, FR-22 | TR-004, TR-009, TR-010 | LangGraph routing node; human-review state handler; SQL persistence layer | TEST-008 | human_review_required, workflow_paused | IMPLEMENTED AND VALIDATED |
 | BR-003, BR-004 | FR-23, FR-24, FR-7 | TR-010, TR-011 | Human-review state handler (`src/workflow/human_review_service.py`, `src/workflow/resume_service.py`) | TEST-009 | human_decision_recorded, workflow_resumed (`WORKFLOW_RESUMED`) | IMPLEMENTED AND VALIDATED |
-| BR-002, BR-003, BR-004 | FR-6, FR-26 | TR-017 | Missing-information request/retrieval component; deterministic completeness/routing logic; human-review state handler (see [security.md §8](security.md#8-missing-information-safety-contract)) | TEST-013 | Stage 1: `workflow_runs.next_action_code = REQUEST_MISSING_INFORMATION` (no `human_reviews` row); Stage 2: unresolved Human Review routing — exact canonical event/reason mapping pending state/catalog design | PLANNED |
+| BR-002, BR-003, BR-004 | FR-6, FR-26 | TR-017 | Missing-information request/retrieval component; deterministic completeness/routing logic; human-review state handler (see [security.md §8](security.md#8-missing-information-safety-contract)) | TEST-013 | Stage 1: `workflow_runs.next_action_code = REQUEST_MISSING_INFORMATION` (no `human_reviews` row); Stage 2: unresolved Human Review routing — exact canonical event/reason mapping pending state/catalog design | PARTIALLY IMPLEMENTED — Stage 1 validated offline; Stage 2 NOT IMPLEMENTED |
 | BR-002, BR-005 | FR-27 | TR-018 | Retry-policy component (LLM adapter / FHIR-style integration client) | TEST-014 | failure classification (retryable/non-retryable), retry outcome/exhaustion — exact canonical audit/reference-data mapping pending state/catalog design | PLANNED |
 | BR-003, BR-004 | FR-28 | TR-019 | Security-policy enforcement gate | TEST-015 | security-policy DENY/block evidence — exact canonical audit/reference-data mapping pending state/catalog design | PLANNED |
-| BR-004 | FR-8, FR-9 | TR-009, TR-012 | SQL persistence layer; audit service | TEST-010 | (all events in §12.1 Audit Event Vocabulary) | PLANNED |
+| BR-004 | FR-8, FR-9 | TR-009, TR-012 | SQL persistence layer; audit service | TEST-010 | (all events in §12.1 Audit Event Vocabulary) | IMPLEMENTED AND VALIDATED — offline and live locally (Task 26D) |
 | BR-006 | FR-10, FR-25 | TR-002, TR-013 | Streamlit UI | TEST-011 | n/a (status display only) | IMPLEMENTED AND VALIDATED — offline and live locally (Task 26D) |
-| BR-005 | FR-5 | TR-003, TR-004 | Deterministic validation service; LangGraph routing node (constraint enforcement, not a separate build item) | TEST-012 | n/a (verified via AC-012) | PLANNED |
+| BR-005 | FR-5 | TR-003, TR-004 | Deterministic validation service; LangGraph routing node (constraint enforcement, not a separate build item) | TEST-012 | n/a (verified via AC-012) | IMPLEMENTED — UI TESTED OFFLINE; BACKEND ENUM VERIFIED BY INSPECTION |
 
 ### 12.1 Audit Event Vocabulary
 
