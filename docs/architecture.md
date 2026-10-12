@@ -20,7 +20,7 @@ the workflow completes.
 See [decisions/](decisions/) for the formal Architecture Decision
 Records behind the choices below.
 
-## 2. Planned Components (Phase 1)
+## 2. Phase 1 Components
 
 | Layer | Technology | Role |
 |-------|-----------|------|
@@ -32,8 +32,17 @@ Records behind the choices below.
 | Database | Microsoft SQL Server (local) | Case data, workflow state, audit log (see [ADR-003](decisions/ADR-003-sql-server.md)) |
 | Testing | pytest | Unit/integration tests for rules and workflow routing |
 
-None of the above is implemented yet — see [README.md](../README.md)
-for current status.
+The Phase 1 prototype includes every component above, but
+implementation and validation maturity varies by capability: the
+Streamlit/FastAPI/SQL Server boundary has been validated live,
+end-to-end, against the real local SQL Server database (Task 26D).
+Synthetic FHIR mode (`FHIR_MODE=synthetic`) has likewise been
+live-exercised, but an approved, authenticated **live** production
+FHIR integration remains **not implemented**. Task 26D's own scenario
+did not require or exercise a live AI call. See
+[README.md — Current Project Status](../README.md#4-current-project-status)
+for the authoritative, current per-component implementation and
+validation status.
 
 ## 3. Architecture Principles
 

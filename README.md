@@ -557,3 +557,49 @@ See:
 - [docs/decisions/](docs/decisions/) — Architecture Decision Records
 - [docs/database/](docs/database/) — Phase 1 canonical database design documentation
 - [CLAUDE.md](CLAUDE.md) — guidance for Claude Code in this repo
+
+## 14. Development Approach — Human-Led, AI-Assisted Engineering
+
+This project was designed and directed by its human project owner,
+who established deterministic-first processing, the foundational
+architecture direction, and the human-in-the-loop principles before
+the project began. Day-to-day work combined three roles:
+
+**Human project owner:**
+- Established deterministic-first processing, the foundational
+  architecture direction, and human-in-the-loop principles before the
+  project began.
+- Directed the project and retained final decision-making authority.
+- Collaborated with ChatGPT on solution design and technical reviews.
+- Participated in manual validation, including Task 26D.
+- Reviewed and approved significant changes.
+
+**ChatGPT — collaborative design and review:**
+- Collaborated with the project owner on detailed solution design and
+  technical reviews.
+- Supported requirements refinement, architecture discussions,
+  implementation planning, test planning, and documentation review.
+- Did not independently execute all tests or inspect every source
+  file.
+
+**Claude Code — implementation support in VS Code:**
+- Assisted with code implementation, automated tests, documentation,
+  and scoped Git operations.
+- Worked from requirements and implementation instructions developed
+  through the human-led design and review process.
+- Operated under human oversight, with explicit approval for
+  significant changes and Git operations.
+
+The typical development cycle was: collaborative design (human +
+ChatGPT) → implementation (Claude Code) → testing and validation →
+collaborative review (human + ChatGPT) → refinement.
+
+This describes how the project was **built** — it is separate from
+the system's own runtime behavior. The application's separately
+configured Azure OpenAI integration supports limited runtime AI
+analysis for narrow, language-oriented workflow sub-tasks (see
+[docs/security.md](docs/security.md)); Task 26D did not exercise a
+live AI invocation. Neither ChatGPT nor Claude Code is a component of
+the running application, and this development process does not change
+any capability boundary described elsewhere in this document. This
+remains a Phase 1 prototype, not a production-ready system.

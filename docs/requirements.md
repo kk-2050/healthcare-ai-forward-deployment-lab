@@ -310,8 +310,9 @@ resume, `resume_workflow()`, `WORKFLOW_RESUMED`), both
 **IMPLEMENTED AND VALIDATED**, offline and against the real local SQL
 Server database; and the BR-001 row (FR-1/FR-2, TR-001/TR-002 — fresh
 case intake, `POST /workflows`, `start_new_case_workflow()`), now
-**IMPLEMENTED AND VALIDATED — offline** (not yet proven against real
-SQL Server). Real code also exists behind part of the BR-004/
+**IMPLEMENTED AND VALIDATED — offline, and live-exercised against the
+real local SQL Server database (Task 26D)**. Real code also exists
+behind part of the BR-004/
 FR-8/FR-9 row (`src/workflow/orchestrator.py` persists workflow
 transitions and audit events to SQL Server), not yet updated here.
 "Planned Implementation" entries name conceptual components, not
@@ -319,7 +320,7 @@ actual files, unless such a file already exists in the repository.
 
 | Business Req | Functional Req | Technical Req | Planned Implementation | Planned Test | Planned Audit Event | Status |
 |---|---|---|---|---|---|---|
-| BR-001 | FR-1, FR-2 | TR-001, TR-002 | Pydantic case model; FastAPI request handler (`POST /workflows`, `src/models/workflow_api.py`, `src/workflow/case_intake_service.py`) | TEST-001 (offline; `tests/test_api_workflow_start.py`, `tests/test_case_intake_service.py`) | case_received, validation_completed (`WORKFLOW_STARTED`) | IMPLEMENTED AND VALIDATED — offline |
+| BR-001 | FR-1, FR-2 | TR-001, TR-002 | Pydantic case model; FastAPI request handler (`POST /workflows`, `src/models/workflow_api.py`, `src/workflow/case_intake_service.py`) | TEST-001 (offline; `tests/test_api_workflow_start.py`, `tests/test_case_intake_service.py`) | case_received, validation_completed (`WORKFLOW_STARTED`) | IMPLEMENTED AND VALIDATED — offline, and live-exercised against real local SQL Server (Task 26D) |
 | BR-001, BR-002 | FR-12, FR-13 | TR-003 | Deterministic validation service | TEST-002 | missing_information_detected | PLANNED |
 | BR-005 | FR-3, FR-14, FR-15 | TR-003, TR-004 | Deterministic validation service; LangGraph routing node | TEST-003 | business_rules_completed | PLANNED |
 | BR-005 | FR-4, FR-16, FR-17 | TR-005, TR-006 | Azure LLM adapter | TEST-004 | llm_requested | PLANNED |
