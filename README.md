@@ -603,3 +603,57 @@ live AI invocation. Neither ChatGPT nor Claude Code is a component of
 the running application, and this development process does not change
 any capability boundary described elsewhere in this document. This
 remains a Phase 1 prototype, not a production-ready system.
+
+## 15. Prototype Screenshots — Local Validation Evidence
+
+These screenshots are evidence from the Task 26D local validation
+session and its supporting read-only SQL verification — not a
+production deployment. They show: **synthetic healthcare data only**;
+a **local Phase 1 prototype**; `FHIR_MODE=synthetic` for this
+validation (no production FHIR integration exists); **no live AI
+invocation** during Task 26D; and **no autonomous AI clinical approval
+or denial** anywhere in the workflow. These are manually captured and
+cropped stills, not AI-generated or reconstructed images — frame-by-
+frame provenance against the original recordings was not independently
+verified.
+
+**1. Healthcare Case Processing**
+![Healthcare Case Processing: a synthetic case is submitted and routed to Human Review](docs/evidence/screenshots/01_case_processing_synthetic.png)
+A synthetic case is submitted through Streamlit. The deterministic
+evidence-consistency check detects a diagnosis mismatch and routes the
+case to `HUMAN_REVIEW_REQUIRED` — no live AI call occurs in this
+scenario.
+
+**2. Human Review**
+![Human Review: a pending review is loaded and a reviewer selects a workflow outcome](docs/evidence/screenshots/02_human_review_decision_synthetic.png)
+The pending review is loaded, and the reviewer selects a workflow
+outcome. Clinical approval or denial is not an available action
+anywhere in this interface.
+
+**3. Pending Resume**
+![Workflow result showing PENDING_RESUME after a Human Review decision](docs/evidence/screenshots/03a_human_review_pending_resume_synthetic.png)
+The Human Review decision is recorded and the workflow status becomes
+`PENDING_RESUME`. The workflow has not resumed yet — a separate,
+explicit action is required to continue it.
+
+**4. Resume & Revalidation**
+![Workflow result showing the resumed run returning to HUMAN_REVIEW_REQUIRED on the same trace ID](docs/evidence/screenshots/03b_resume_revalidation_synthetic.png)
+Resume continues the same trace ID at the application level — never
+LangGraph checkpoint restoration. Because the underlying evidence
+mismatch remains unresolved, the workflow correctly returns to
+`HUMAN_REVIEW_REQUIRED`.
+
+**5. Audit Event History**
+![Durable audit event history for one trace ID, including WORKFLOW_RESUMED](docs/evidence/screenshots/04b_audit_event_history_synthetic.png)
+The recorded workflow events for this case, including
+`WORKFLOW_RESUMED` and the Human Review events. This image is cropped
+and does not by itself prove the `GET /workflows/{trace_id}` refresh
+request completed successfully. The SQL screenshot below independently
+confirms the underlying data is persisted — a related but separate
+fact from confirming that specific HTTP call.
+
+**6. SQL Server Persistence**
+![SQL Server query results showing workflow, Human Review, and audit records sharing one trace ID](docs/evidence/screenshots/05_sql_persistence_audit_synthetic.png)
+The same workflow run, Human Review records, and audit events,
+verified directly in the real local SQL Server database — all sharing
+one trace ID.
