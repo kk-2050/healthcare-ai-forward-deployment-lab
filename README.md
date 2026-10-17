@@ -657,3 +657,32 @@ fact from confirming that specific HTTP call.
 The same workflow run, Human Review records, and audit events,
 verified directly in the real local SQL Server database — all sharing
 one trace ID.
+
+## 16. Portfolio Presentation
+
+Explore the Healthcare AI Forward Deployment Lab — a Phase 1 portfolio
+prototype supporting healthcare prior authorization workflows.
+
+**English Presentation**
+
+- [View Online Presentation (Gamma)](https://gamma.app/docs/Healthcare-AI-Forward-Deployment-Lab-e1gz1wq13tgvzh7?mode=doc)
+- [Download PowerPoint with Speaker Notes](docs/Healthcare-AI-Forward-Deployment-Lab.pptx)
+
+The presentation explains:
+
+- The business problem and intended users
+- Requirements and solution architecture
+- Deterministic-first workflow processing
+- Human Review and application-level Resume
+- SQL Server persistence and audit-event traceability
+- Automated testing and real local validation evidence
+- Current prototype capabilities and the production roadmap
+- Human-led, AI-assisted collaborative engineering
+
+**Important limitations:** The prototype uses synthetic healthcare data
+only. Task 26D validated the local workflow without a live AI call or
+production FHIR integration. AI does not independently approve or deny
+clinical care.
+
+The PowerPoint includes English Speaker Notes with additional
+explanations.
